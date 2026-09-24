@@ -92,6 +92,7 @@ jobs:
       - if: steps.check.outputs.configured == 'true'
         uses: supabase/setup-cli@v1
         with:
-          version: latest
+          # 固定版本：用 latest 需要查 GitHub API，偶爾會被限流而失敗
+          version: 2.117.0
       - if: steps.check.outputs.configured == 'true'
         run: supabase functions deploy recognize-scorecard --project-ref "$PROJECT_REF"
