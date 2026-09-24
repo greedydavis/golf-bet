@@ -1,0 +1,7 @@
+node_modules
+dist
+.env
+.env.local
+supabase/setup-all.sql
+supabase/.temp
+*.tsbuildinfo
