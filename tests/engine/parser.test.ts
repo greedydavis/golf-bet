@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { completeMatrix, formatMatrix, parseHandicap } from '@/engine/handicap/parser';
+import { completeMatrix, formatMatrix, normalizeForSeats, parseHandicap } from '@/engine/handicap/parser';
 import { SEATS3, SEATS4 } from './fixtures';
 
 describe('讓桿語法解析', () => {
@@ -153,5 +153,19 @@ describe('讓桿語法解析', () => {
     const r = parseHandicap('AB平打\nAB讓C前3後3\nAB讓D18\nD讓C後2', SEATS4);
     const text = formatMatrix(r.matrix, SEATS4);
     expect(parseHandicap(text, SEATS4).matrix).toEqual(r.matrix);
+  });
+});
+
+describe('normalizeForSeats', () => {
+  it('空白文字：所有配對寫成平打', () => {
+    expect(normalizeForSeats('', SEATS3)).toBe('AB平打\nAC平打\nBC平打');
+  });
+
+  it('從 4 人改成 3 人：去掉 D 的配對，其餘保留', () => {
+    expect(normalizeForSeats('AB讓D18\nA讓C前3\nB讓C5', SEATS3)).toBe('AB平打\nA讓C前3\nB讓C5');
+  });
+
+  it('文字有錯誤時原樣回傳', () => {
+    expect(normalizeForSeats('A讓B2.5', SEATS3)).toBe('A讓B2.5');
   });
 });

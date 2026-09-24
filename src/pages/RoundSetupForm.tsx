@@ -5,7 +5,7 @@ import { useApi } from '@/app/auth';
 import { BetEditor, betProblems } from '@/components/BetEditor';
 import { HandicapEditor, useHandicapParse, type Preset } from '@/components/HandicapEditor';
 import { APP_CONFIG, STROKE_MODE_LABEL, TIE_RULE_LABEL } from '@/engine/config';
-import { describeGrant } from '@/engine/handicap/parser';
+import { describeGrant, normalizeForSeats } from '@/engine/handicap/parser';
 import { allPairs, seatsFor } from '@/engine/pairs';
 import type { BetConfig } from '@/engine/games/registry';
 import { SEATS, SEGMENT_LABEL, type Seat, type Segment } from '@/engine/types';
@@ -71,6 +71,8 @@ export function RoundSetupForm({ roundId, initial, players: initialPlayers, cour
     const e = stepErrors(step);
     setErrors(e);
     if (!e.length) {
+      // 進入讓桿設定時，依目前人數整理：所有配對預設平打、去掉已不存在的座位
+      if (step === 0) setText((t) => normalizeForSeats(t, seats));
       setStep(step + 1);
       window.scrollTo({ top: 0 });
     }

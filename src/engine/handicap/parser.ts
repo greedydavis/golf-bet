@@ -9,7 +9,7 @@
 // 一行可以寫多條規則（以空白、逗號、分號隔開）。解析失敗或衝突一律回報錯誤，不自動猜。
 
 import { allPairs, pairKey } from '../pairs';
-import type { Grant, HandicapMatrix, PairKey, Seat } from '../types';
+import { SEATS, type Grant, type HandicapMatrix, type PairKey, type Seat } from '../types';
 
 export interface LineIssue {
   line: number; // 1-based
@@ -222,6 +222,19 @@ export function completeMatrix(matrix: HandicapMatrix, seats: readonly Seat[]): 
   const out = {} as Record<PairKey, Grant>;
   for (const p of allPairs(seats)) out[p] = matrix[p] ?? { kind: 'even' };
   return out;
+}
+
+/**
+ * 依目前的球員人數整理讓桿文字：去掉不存在的座位、沒寫到的配對明確寫成平打。
+ * 文字本身有錯誤（不看座位數）時原樣回傳，交給使用者修正。
+ */
+export function normalizeForSeats(text: string, seats: readonly Seat[]): string {
+  const all = parseHandicap(text, SEATS);
+  if (!all.ok) return text;
+  const pairs = allPairs(seats);
+  const m: HandicapMatrix = {};
+  for (const p of pairs) m[p] = all.matrix[p] ?? { kind: 'even' };
+  return formatMatrix(m, seats);
 }
 
 /** 單一配對轉回簡寫，例如 "A讓B前2後4" */
