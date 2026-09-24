@@ -17,13 +17,15 @@ export interface SetupInitial {
   courseName: string;
   handicapText: string;
   bet: BetConfig;
+  /** 球局目前的球場快照（修改設定時；可能是輸入成績時從成績卡讀到的） */
+  courseSnapshot?: { pars: number[]; hcpIndex: number[] } | null;
 }
 
 interface Props {
   roundId?: number;
   initial: SetupInitial;
   players: { id: number; name: string; active: boolean }[];
-  courses: { id: number; name: string }[];
+  courses: { id: number; name: string; hcpIndex: number[] }[];
   presets: Preset[];
 }
 
@@ -42,6 +44,13 @@ export function RoundSetupForm({ roundId, initial, players: initialPlayers, cour
   const [courseName, setCourseName] = useState(initial.courseName);
   const [text, setText] = useState(initial.handicapText);
   const [bet, setBet] = useState(initial.bet);
+  // 差點洞序：選了已建檔球場就用它；「其他」且沒換過球場時用球局原本的快照
+  const hcpIndex =
+    courseId !== null
+      ? (courses.find((c) => c.id === courseId)?.hcpIndex ?? null)
+      : initial.courseId === null
+        ? (initial.courseSnapshot?.hcpIndex ?? null)
+        : null;
   const [newName, setNewName] = useState('');
   const [errors, setErrors] = useState<string[]>([]);
   const [pending, start] = useTransition();
@@ -243,6 +252,7 @@ export function RoundSetupForm({ roundId, initial, players: initialPlayers, cour
 
       {step === 1 && (
         <HandicapEditor
+          hcpIndex={hcpIndex}
           seats={seats}
           names={names}
           text={text}

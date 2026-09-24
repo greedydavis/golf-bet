@@ -39,6 +39,7 @@ export function RoundSetupPage() {
         courseName: r.courseName,
         handicapText: r.handicapText,
         bet: r.bet,
+        courseSnapshot: r.course,
       }
     : {
         date: today(),

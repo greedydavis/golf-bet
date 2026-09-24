@@ -39,6 +39,16 @@ export function allocateSplit(front: number, back: number, hcpIndex: number[]): 
   return out;
 }
 
+/**
+ * 全場讓 n 桿換成前後九分開：依 18 洞差點洞序分配後，算出實際落在前九、後九的桿數。
+ * 用在「前九打完才要調整後九」時，前九維持打球當下的讓桿。
+ */
+export function fullToSplit(n: number, hcpIndex: number[]): { front: number; back: number } {
+  const per = allocateFull(n, hcpIndex);
+  const front = FRONT.reduce<number>((s, h) => s + per[h], 0);
+  return { front, back: n - front };
+}
+
 /** 回傳配對雙方每洞「被讓」的桿數（讓方全為 0） */
 export function strokesReceived(grant: Grant | undefined, a: Seat, b: Seat, hcpIndex: number[]): Record<Seat, number[]> {
   const zeros = () => new Array<number>(HOLES).fill(0);

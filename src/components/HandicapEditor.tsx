@@ -6,6 +6,7 @@ import { useApi } from '@/app/auth';
 import type { Preset } from '@/data/types';
 import { APP_CONFIG } from '@/engine/config';
 import { formatMatrix, normalizeForSeats, normalizeGrant, parseHandicap, type ParseResult } from '@/engine/handicap/parser';
+import { fullToSplit } from '@/engine/handicap/allocate';
 import { allPairs } from '@/engine/pairs';
 import type { Grant, HandicapMatrix, PairKey, Seat } from '@/engine/types';
 
@@ -18,13 +19,15 @@ interface Props {
   onTextChange: (text: string) => void;
   presets: Preset[];
   onPresetsChange: (p: Preset[]) => void;
+  /** 球場差點洞序；知道時，全場切換成前後九會依實際落點換算 */
+  hcpIndex?: number[] | null;
 }
 
 export function useHandicapParse(text: string, seats: Seat[]): ParseResult {
   return useMemo(() => parseHandicap(text, seats), [text, seats]);
 }
 
-export function HandicapEditor({ seats, names, text, onTextChange, presets, onPresetsChange }: Props) {
+export function HandicapEditor({ seats, names, text, onTextChange, presets, onPresetsChange, hcpIndex }: Props) {
   const parsed = useHandicapParse(text, seats);
   const [showText, setShowText] = useState(!parsed.ok);
   const [presetName, setPresetName] = useState('');
@@ -108,7 +111,14 @@ export function HandicapEditor({ seats, names, text, onTextChange, presets, onPr
         ) : (
           <ul className="space-y-3">
             {allPairs(seats).map((p) => (
-              <PairRow key={p} pair={p} names={names} grant={parsed.matrix[p]} onChange={(g) => setGrant(p, g)} />
+              <PairRow
+                key={p}
+                pair={p}
+                names={names}
+                grant={parsed.matrix[p]}
+                hcpIndex={hcpIndex ?? null}
+                onChange={(g) => setGrant(p, g)}
+              />
             ))}
           </ul>
         )}
@@ -249,7 +259,19 @@ function Stepper({ value, min, onChange, label }: { value: number; min: number; 
  * 一對球員的讓桿。讓桿數維持至少 1 桿（0 桿等於平打），
  * 讓畫面狀態可以完全由讓桿文字還原。
  */
-function PairRow({ pair, names, grant, onChange }: { pair: PairKey; names: Record<Seat, string>; grant?: Grant; onChange: (g: Grant) => void }) {
+function PairRow({
+  pair,
+  names,
+  grant,
+  hcpIndex,
+  onChange,
+}: {
+  pair: PairKey;
+  names: Record<Seat, string>;
+  grant?: Grant;
+  hcpIndex: number[] | null;
+  onChange: (g: Grant) => void;
+}) {
   const [x, y] = [pair[0] as Seat, pair[1] as Seat];
   const g = grant ? normalizeGrant(grant) : ({ kind: 'even' } as const);
   const giver = g.kind === 'even' ? null : g.giver;
@@ -265,8 +287,9 @@ function PairRow({ pair, names, grant, onChange }: { pair: PairKey; names: Recor
     if (!giver || g.kind === 'even' || g.kind === mode) return;
     const r = receiverOf(giver);
     if (mode === 'split' && g.kind === 'full') {
-      // 全場 N 換成前後九：盡量平均分，前九多一桿
-      onChange({ kind: 'split', giver, receiver: r, front: Math.ceil(g.n / 2), back: Math.floor(g.n / 2) });
+      // 全場 N 換成前後九：知道差點洞序就依實際落點換算（前九維持打球當下的讓桿），否則平均分、前九多一桿
+      const { front, back } = hcpIndex ? fullToSplit(g.n, hcpIndex) : { front: Math.ceil(g.n / 2), back: Math.floor(g.n / 2) };
+      onChange({ kind: 'split', giver, receiver: r, front, back });
     } else if (mode === 'full' && g.kind === 'split') {
       onChange({ kind: 'full', giver, receiver: r, n: Math.max(1, g.front + g.back) });
     }
@@ -305,6 +328,13 @@ function PairRow({ pair, names, grant, onChange }: { pair: PairKey; names: Recor
               <Stepper label="前九" value={g.front} min={g.back === 0 ? 1 : 0} onChange={(front) => onChange({ ...g, front })} />
               <Stepper label="後九" value={g.back} min={g.front === 0 ? 1 : 0} onChange={(back) => onChange({ ...g, back })} />
             </>
+          )}
+          {g.kind === 'full' && (
+            <p className="text-xs text-gray-400">
+              {hcpIndex
+                ? '切換成前後九時，會依球場差點洞序算出前九實際讓的桿數，前九輸贏不變。'
+                : '球場尚未建檔：切換成前後九時先平均分配，請自行確認前九桿數。'}
+            </p>
           )}
           <p className="text-xs text-gray-500">
             {names[g.giver]} 讓 {names[g.receiver]}

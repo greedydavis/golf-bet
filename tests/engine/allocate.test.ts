@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { allocateFull, allocateSplit, strokesReceived } from '@/engine/handicap/allocate';
+import { allocateFull, allocateSplit, fullToSplit, strokesReceived } from '@/engine/handicap/allocate';
 import { course, holesWith } from './fixtures';
 
 const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
@@ -77,5 +77,32 @@ describe('strokesReceived', () => {
   it('平打雙方皆 0', () => {
     const r = strokesReceived({ kind: 'even' }, 'A', 'B', hcp);
     expect(sum(r.A) + sum(r.B)).toBe(0);
+  });
+});
+
+describe('全場換成前後九分開', () => {
+  it('前九單數、後九雙數的球場：全場 10 桿 = 前 5 後 5', () => {
+    expect(fullToSplit(10, hcp)).toEqual({ front: 5, back: 5 });
+  });
+
+  it('全場 3 桿：差點 1、3 在前九，2 在後九 = 前 2 後 1', () => {
+    expect(fullToSplit(3, hcp)).toEqual({ front: 2, back: 1 });
+  });
+
+  it('差點洞序不是奇偶排列：依實際落點計算', () => {
+    const custom = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18];
+    expect(fullToSplit(10, custom)).toEqual({ front: 9, back: 1 });
+    expect(fullToSplit(20, custom)).toEqual({ front: 11, back: 9 });
+  });
+
+  it('換算後前九的分配與全場讓桿完全相同', () => {
+    const custom = [2, 5, 11, 1, 8, 16, 4, 13, 9, 7, 3, 15, 6, 12, 18, 10, 14, 17];
+    for (const n of [1, 4, 9, 13, 18, 22]) {
+      const { front, back } = fullToSplit(n, custom);
+      const full = allocateFull(n, custom);
+      const split = allocateSplit(front, back, custom);
+      expect(split.slice(0, 9)).toEqual(full.slice(0, 9));
+      expect(split.reduce((a, b) => a + b, 0)).toBe(n);
+    }
   });
 });
