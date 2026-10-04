@@ -53,6 +53,8 @@ export function RoundSetupForm({ roundId, initial, players: initialPlayers, cour
         ? (initial.courseSnapshot?.hcpIndex ?? null)
         : null;
   const [newName, setNewName] = useState('');
+  /** 正在換人的位置（第幾組、第幾位） */
+  const [replacing, setReplacing] = useState<{ g: number; i: number } | null>(null);
   const [errors, setErrors] = useState<string[]>([]);
   const [pending, start] = useTransition();
 
@@ -101,8 +103,12 @@ export function RoundSetupForm({ roundId, initial, players: initialPlayers, cour
   const canAdd = (g: number) => groups[g].length < FLIGHT_SIZE;
   const addTo = (g: number, id: number) =>
     setGroups((gs) => gs.map((ids, i) => (i === g && ids.length < FLIGHT_SIZE && !gs.flat().includes(id) ? [...ids, id] : ids)));
-  const removePlayer = (id: number) => setGroups((gs) => gs.map((ids) => ids.filter((x) => x !== id)));
-  const move = (g: number, i: number, d: -1 | 1) =>
+  const removePlayer = (id: number) => {
+    setReplacing(null);
+    setGroups((gs) => gs.map((ids) => ids.filter((x) => x !== id)));
+  };
+  const move = (g: number, i: number, d: -1 | 1) => {
+    setReplacing(null);
     setGroups((gs) =>
       gs.map((ids, k) => {
         const j = i + d;
@@ -112,13 +118,27 @@ export function RoundSetupForm({ roundId, initial, players: initialPlayers, cour
         return next;
       }),
     );
+  };
+  /**
+   * 換人：把某個座位的球員換成另一位，座位不變（讓桿設定與已輸入的成績都跟著座位，不會跑掉）。
+   * 換上來的人如果已經在場上，就兩人對調位置。
+   */
+  const replaceAt = (g: number, i: number, newId: number) => {
+    setGroups((gs) => {
+      const oldId = gs[g][i];
+      return gs.map((ids, k) => ids.map((id, j) => (k === g && j === i ? newId : id === newId ? oldId : id)));
+    });
+    setReplacing(null);
+  };
   /** 把球員移到另一組（另一組還有位置時） */
-  const switchGroup = (g: number, id: number) =>
+  const switchGroup = (g: number, id: number) => {
+    setReplacing(null);
     setGroups((gs) => {
       const other = g === 0 ? 1 : 0;
       if (!gs[other] || gs[other].length >= FLIGHT_SIZE) return gs;
       return gs.map((ids, k) => (k === g ? ids.filter((x) => x !== id) : k === other ? [...ids, id] : ids));
     });
+  };
   const addPlayer = () =>
     start(async () => {
       let created: { id: number; name: string };
@@ -247,21 +267,21 @@ export function RoundSetupForm({ roundId, initial, players: initialPlayers, cour
               {ids.length > 0 && (
                 <ul className="mb-3 space-y-2">
                   {ids.map((id, i) => (
-                    <li key={id} className="flex items-center gap-1 rounded-xl bg-brand-50 px-3 py-2">
+                    <li key={id} className="rounded-xl bg-brand-50 px-3 py-2">
+                     <div className="flex items-center gap-1">
                       <span className="mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-600 font-bold text-white">
                         {seatAt(g + 1, i)}
                       </span>
                       <span className="flex-1 truncate font-semibold">{nameOf(id)}</span>
-                      {groups.length > 1 && (
-                        <button
-                          type="button"
-                          className="min-h-9 rounded-lg px-2 text-xs text-brand-700 disabled:opacity-30"
-                          onClick={() => switchGroup(g, id)}
-                          disabled={groups[g === 0 ? 1 : 0].length >= FLIGHT_SIZE}
-                        >
-                          移到第 {g === 0 ? 2 : 1} 組
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        className={`min-h-9 rounded-lg px-2 text-xs ${
+                          replacing?.g === g && replacing.i === i ? 'bg-brand-600 font-semibold text-white' : 'text-brand-700'
+                        }`}
+                        onClick={() => setReplacing(replacing?.g === g && replacing.i === i ? null : { g, i })}
+                      >
+                        換人
+                      </button>
                       <button
                         type="button"
                         className="px-2 text-xl text-gray-500 disabled:opacity-20"
@@ -283,6 +303,45 @@ export function RoundSetupForm({ roundId, initial, players: initialPlayers, cour
                       <button type="button" className="px-2 text-xl text-gray-400" onClick={() => removePlayer(id)} aria-label="移除">
                         ×
                       </button>
+                     </div>
+                      {replacing?.g === g && replacing.i === i && (
+                        <div className="mt-2 rounded-lg bg-white p-2">
+                          <p className="mb-2 text-xs text-gray-600">
+                            把座位 {seatAt(g + 1, i)} 的「{nameOf(id)}」換成誰？座位、讓桿和已輸入的成績都會留在這個座位。
+                          </p>
+                          <div className="flex flex-wrap gap-2">
+                            {players
+                              .filter((p) => p.active && !playerIds.includes(p.id))
+                              .map((p) => (
+                                <button
+                                  key={p.id}
+                                  type="button"
+                                  className="rounded-full bg-gray-100 px-3 py-2 text-sm font-medium active:bg-gray-200"
+                                  onClick={() => replaceAt(g, i, p.id)}
+                                >
+                                  {p.name}
+                                </button>
+                              ))}
+                            {slots
+                              .filter((x) => x.id !== id)
+                              .map((x) => (
+                                <button
+                                  key={x.id}
+                                  type="button"
+                                  className="rounded-full bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800 ring-1 ring-amber-200 active:bg-amber-100"
+                                  onClick={() => replaceAt(g, i, x.id)}
+                                >
+                                  與 {x.seat} {nameOf(x.id)} 對調
+                                </button>
+                              ))}
+                          </div>
+                          {groups.length > 1 && groups[g === 0 ? 1 : 0].length < FLIGHT_SIZE && (
+                            <button type="button" className="mt-2 min-h-9 text-sm text-brand-700" onClick={() => switchGroup(g, id)}>
+                              改成移到第 {g === 0 ? 2 : 1} 組（排在最後）
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </li>
                   ))}
                 </ul>
