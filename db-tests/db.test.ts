@@ -104,7 +104,7 @@ describe('球友、球場、預設組合', () => {
 describe('球局', () => {
   it('建立球局：座位依順序，人數與重複檢查', async () => {
     const [a, b] = await newPlayers('甲1', '乙1');
-    await expect(newRound([a])).rejects.toThrow('2~4');
+    await expect(newRound([a])).rejects.toThrow('2~8');
     await expect(newRound([a, a])).rejects.toThrow('重複');
     await expect(newRound([a, b], { matrix: { AC: { kind: 'even' } } })).rejects.toThrow('不存在的配對');
     const id = await newRound([a, b]);
@@ -199,7 +199,11 @@ describe('球局', () => {
     await expect(t.rpc(member, 'set_round_image', { p_id: id, p_path: `999/x.jpg` })).rejects.toThrow('路徑');
     expect(await t.rpc(member, 'set_round_image', { p_id: id, p_path: `${id}/1.jpg` })).toBeNull();
     expect(await t.rpc(member, 'set_round_image', { p_id: id, p_path: `${id}/2.jpg` })).toBe(`${id}/1.jpg`);
-    expect(await t.rpc(member, 'delete_round', { p_id: id })).toBe(`${id}/2.jpg`);
+    // 第 2 組的照片另外存，不會蓋掉第 1 組
+    expect(await t.rpc(member, 'set_round_image', { p_id: id, p_path: `${id}/f2.jpg`, p_flight: 2 })).toBeNull();
+    const round = await t.rpc<{ scorecardImages: (string | null)[] }>(member, 'get_round', { p_id: id });
+    expect(round.scorecardImages).toEqual([`${id}/2.jpg`, `${id}/f2.jpg`]);
+    expect(await t.rpc(member, 'delete_round', { p_id: id })).toEqual([`${id}/2.jpg`, `${id}/f2.jpg`]);
     await expect(t.rpc(member, 'get_round', { p_id: id })).rejects.toThrow('找不到');
   });
 
@@ -207,5 +211,65 @@ describe('球局', () => {
     const [a, b] = await newPlayers('甲6', '乙6');
     await newRound([a, b]);
     await expect(t.sql(`delete from app.players where id = $1`, [a])).rejects.toThrow(/foreign key/);
+  });
+});
+
+describe('兩組球局與指定抓球對象', () => {
+  it('第 1 組 A~D、第 2 組 E~H；每組最多 4 人、全場最多 8 人', async () => {
+    const ids = await newPlayers('組1', '組2', '組3', '組4', '組5', '組6', '組7', '組8', '組9');
+    const id = await newRound(ids.slice(0, 5), { flights: [1, 1, 1, 2, 2] });
+    const round = await t.rpc<{ players: { seat: string; flight: number; playerId: number }[] }>(member, 'get_round', { p_id: id });
+    expect(round.players.map((p) => [p.seat, p.flight, p.playerId])).toEqual([
+      ['A', 1, ids[0]],
+      ['B', 1, ids[1]],
+      ['C', 1, ids[2]],
+      ['E', 2, ids[3]],
+      ['F', 2, ids[4]],
+    ]);
+
+    await expect(newRound(ids.slice(0, 5))).rejects.toThrow('每組最多 4 人'); // 沒給組別 = 全部第 1 組
+    await expect(newRound(ids, { flights: [1, 1, 1, 1, 2, 2, 2, 2, 2] })).rejects.toThrow('2~8');
+    await expect(newRound(ids.slice(0, 3), { flights: [1, 2] })).rejects.toThrow('不符');
+    await expect(newRound(ids.slice(0, 2), { flights: [2, 2] })).rejects.toThrow('第 1 組');
+    await expect(newRound(ids.slice(0, 2), { flights: [1, 3] })).rejects.toThrow('組別');
+    expect(await newRound(ids.slice(0, 8), { flights: [1, 1, 1, 1, 2, 2, 2, 2] })).toBeGreaterThan(0);
+  });
+
+  it('讓桿矩陣可以有跨組配對與「不抓」，不存在的座位會被擋', async () => {
+    const ids = await newPlayers('跨1', '跨2', '跨3');
+    const flights = [1, 1, 2]; // 座位 A、B、E
+    const ok = await newRound(ids, {
+      flights,
+      matrix: { AB: { kind: 'none' }, AE: { kind: 'even' }, BE: { kind: 'full', giver: 'B', receiver: 'E', n: 5 } },
+    });
+    const round = await t.rpc<{ matrix: Record<string, { kind: string }> }>(member, 'get_round', { p_id: ok });
+    expect(round.matrix.AB.kind).toBe('none');
+    await expect(newRound(ids, { flights, matrix: { AC: { kind: 'even' } } })).rejects.toThrow('不存在的配對');
+    await expect(newRound(ids, { flights, matrix: { AE: { kind: 'maybe' } } })).rejects.toThrow('格式錯誤');
+  });
+
+  it('修改設定把球員移到第 2 組：成績依座位保留，結算檢查用新的座位', async () => {
+    const ids = await newPlayers('移1', '移2', '移3');
+    const id = await newRound(ids);
+    await t.rpc(member, 'save_scores', {
+      p_id: id,
+      p_scores: { A: card(), B: card(1), C: card(2) },
+      p_course: { pars: PARS, hcpIndex: HCP, saveAsCourse: false },
+    });
+    await t.rpc(member, 'update_round_setup', {
+      p_id: id,
+      p_data: { date: '2026-09-20', playerIds: ids, flights: [1, 1, 2], courseId: null, courseName: '測試球場', handicapText: '', matrix: {}, bet: BET },
+    });
+    const round = await t.rpc<{ players: { seat: string; scores: (number | null)[] }[] }>(member, 'get_round', { p_id: id });
+    expect(round.players.map((p) => p.seat)).toEqual(['A', 'B', 'E']);
+    expect(round.players[1].scores).toEqual(card(1));
+    expect(round.players[2].scores).toEqual(new Array(18).fill(null)); // E 是新座位，原本 C 的成績不會跟過去
+
+    await t.rpc(member, 'save_scores', { p_id: id, p_scores: { E: card(2) } });
+    await expect(
+      t.rpc(member, 'set_round_result', { p_id: id, p_result: { points: { A: 1, B: 0, C: -1 }, money: { A: 100, B: 0, C: -100 } } }),
+    ).rejects.toThrow('不符');
+    await t.rpc(member, 'set_round_result', { p_id: id, p_result: { points: { A: 1, B: 0, E: -1 }, money: { A: 100, B: 0, E: -100 } } });
+    expect((await t.rpc<{ status: string }>(member, 'get_round', { p_id: id })).status).toBe('settled');
   });
 });

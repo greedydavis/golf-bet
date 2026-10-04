@@ -123,7 +123,15 @@ export function RoundPage() {
         </div>
       </Section>
 
-      {round.scorecardImage && <ScorecardPhoto path={round.scorecardImage} />}
+      {round.scorecardImages.map((path, i) =>
+        path ? (
+          <ScorecardPhoto
+            key={path}
+            path={path}
+            label={round.scorecardImages.filter(Boolean).length > 1 || i > 0 ? `成績卡照片（第 ${i + 1} 組）` : '成績卡照片'}
+          />
+        ) : null,
+      )}
 
       <details className="card mb-4">
         <summary className="font-bold">LINE 文字預覽</summary>
@@ -231,16 +239,16 @@ function NetCell({ gross, received, win }: { gross: number; received: number; wi
   );
 }
 
-function ScorecardPhoto({ path }: { path: string }) {
+function ScorecardPhoto({ path, label }: { path: string; label: string }) {
   const backend = useBackend();
   const [open, setOpen] = useState(false);
   const url = useQuery({ queryKey: ['image', path], queryFn: () => backend.imageUrl(path), enabled: open, staleTime: 30 * 60_000 });
   return (
     <details className="card mb-4" onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
-      <summary className="font-bold">成績卡照片</summary>
+      <summary className="font-bold">{label}</summary>
       {url.isLoading && <Loading />}
       {url.error && <ErrorBox error={url.error} />}
-      {url.data && <img src={url.data} alt="成績卡照片" className="mt-3 w-full rounded-xl" />}
+      {url.data && <img src={url.data} alt={label} className="mt-3 w-full rounded-xl" />}
     </details>
   );
 }

@@ -2,7 +2,7 @@
 
 import { validateCourse, isValidStroke } from './course';
 import { strokesReceived } from './handicap/allocate';
-import { completeMatrix } from './handicap/parser';
+import { completeMatrix, isActive } from './handicap/parser';
 import { allPairs, splitPair } from './pairs';
 import { round2, suggestPayments, type Payment } from './payments';
 import { GAMES, type BetConfig } from './games/registry';
@@ -77,7 +77,13 @@ export function settleRound(input: RoundInput): SettleResult {
   const points = Object.fromEntries(seats.map((s) => [s, 0])) as Record<Seat, number>;
   const enabled = GAMES.filter((g) => bet.games[g.id]?.enabled);
 
-  const pairs: PairSettlement[] = allPairs(seats).map((pair) => {
+  // 「不抓」的配對不計算；沒有任何配對要抓時不能結算
+  const active = allPairs(seats).filter((pair) => isActive(matrix[pair]));
+  if (active.length === 0 && !enabled.some((g) => g.scope === 'group')) {
+    return { ok: false, errors: ['尚未設定任何抓球對象'] };
+  }
+
+  const pairs: PairSettlement[] = active.map((pair) => {
     const [a, b] = splitPair(pair);
     const grant = matrix[pair];
     const received = strokesReceived(grant, a, b, course.hcpIndex);

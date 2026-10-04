@@ -34,7 +34,9 @@ export function RoundSetupPage() {
   const initial = r
     ? {
         date: r.date,
-        playerIds: r.players.map((p) => p.playerId),
+        groups: [1, 2]
+          .map((f) => r.players.filter((p) => p.flight === f).map((p) => p.playerId))
+          .filter((ids, i) => i === 0 || ids.length > 0),
         courseId: r.courseId,
         courseName: r.courseName,
         handicapText: r.handicapText,
@@ -43,7 +45,7 @@ export function RoundSetupPage() {
       }
     : {
         date: today(),
-        playerIds: [],
+        groups: [[]],
         courseId: null,
         courseName: '',
         handicapText: '',

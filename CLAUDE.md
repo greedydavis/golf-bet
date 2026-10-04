@@ -9,6 +9,8 @@
 - **兩種後端，同一套 SQL**（`src/data/backend.ts`）：有 `VITE_SUPABASE_URL`、`VITE_SUPABASE_ANON_KEY` 時用 Supabase；沒有時用示範模式（瀏覽器內 PGlite 跑同一套 migrations）。`supabase/local/auth_shim.sql` 只給 PGlite 用。
 - 權限：角色 `owner`（第一個註冊的帳號）、`member`、`pending`。`app` schema 的資料表開 RLS、不開 policy；前端只能呼叫 `public` schema 的 RPC，每個 RPC 先 `app.require_member()` / `app.require_owner()`。
 - 結算：前端用 `src/engine/` 計算，`set_round_result` 由資料庫檢查（每位球員都有、加總為 0、成績完整、有球場資料）後寫入 `net_points` / `net_money`。改成績或設定的 RPC 會先把球局退回 draft，前端再呼叫 `api.resettle()`。
+- 分組：一場球局最多 2 組、8 人。座位第 1 組固定 A~D、第 2 組 E~H（`seatAt` / `flightOf`），組別由座位推得、資料庫不另存；某一組加減人不會讓另一組的座位代號位移。
+- 抓球對象：讓桿矩陣的 `kind: 'none'` 代表這一對不抓，`settleRound` 會跳過。文字語法是 `AE不抓`。沒寫到的配對在引擎裡視為平打；開局精靈會用 `normalizeForSeats(text, seats, fallback)` 把所有配對明確寫出（單組補平打、兩組補不抓）。
 - 成績卡辨識：`supabase/functions/recognize-scorecard/core.ts` 不 import 任何套件，Edge Function（Deno）與本機開發伺服器（`vite.config.ts` 的 `/api/recognize`）共用。模型固定 `claude-sonnet-5`（使用者指定）。
 
 ## 規則

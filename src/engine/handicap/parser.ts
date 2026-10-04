@@ -1,6 +1,7 @@
 // 讓桿簡寫語法解析
 //
 //   AB平打        A、B 互不讓桿（可多人，例如 ABC平打 = 三人兩兩平打）
+//   AE不抓        A、E 不比輸贏（可多人，例如 ABE不抓 = 三人兩兩不抓）
 //   AB讓D18       A 讓 D 18 桿、B 讓 D 18 桿
 //   A讓CD5        A 讓 C 5 桿、A 讓 D 5 桿
 //   AB讓C前3後3   前九 3 桿、後九 3 桿
@@ -38,7 +39,7 @@ interface Entry {
   text: string;
 }
 
-const FORMAT_HINT = '格式例如「AB平打」「AB讓C10」「A讓B前2後4」';
+const FORMAT_HINT = '格式例如「AB平打」「AB讓C10」「A讓B前2後4」「AE不抓」';
 
 /** 全形轉半形、轉大寫、簡體字轉繁體 */
 export function normalizeToken(s: string): string {
@@ -61,7 +62,7 @@ export function grantsEqual(x: Grant, y: Grant): boolean {
   const a = normalizeGrant(x);
   const b = normalizeGrant(y);
   if (a.kind !== b.kind) return false;
-  if (a.kind === 'even') return true;
+  if (a.kind === 'even' || a.kind === 'none') return true;
   if (a.giver !== (b as typeof a).giver || a.receiver !== (b as typeof a).receiver) return false;
   if (a.kind === 'full') return a.n === (b as typeof a).n;
   return a.front === (b as typeof a).front && a.back === (b as typeof a).back;
@@ -81,20 +82,18 @@ function parseSeats(letters: string, seats: readonly Seat[]): Seat[] | string {
 }
 
 function parseToken(token: string, seats: readonly Seat[]): TokenResult {
-  const head = /^([A-Z]+)(平打|讓)(.*)$/.exec(token);
+  const head = /^([A-Z]+)(平打|不抓|讓)(.*)$/.exec(token);
   if (!head) return { ok: false, message: `無法解析，${FORMAT_HINT}` };
   const [, leftLetters, verb, rest] = head;
 
   const left = parseSeats(leftLetters, seats);
   if (typeof left === 'string') return { ok: false, message: left };
 
-  if (verb === '平打') {
-    if (rest !== '') return { ok: false, message: `「平打」後面不應有其他內容，${FORMAT_HINT}` };
-    if (left.length < 2) return { ok: false, message: '平打至少要寫兩位球員，例如「AB平打」' };
-    return {
-      ok: true,
-      entries: allPairs([...left].sort()).map((pair) => ({ pair, grant: { kind: 'even' } })),
-    };
+  if (verb === '平打' || verb === '不抓') {
+    if (rest !== '') return { ok: false, message: `「${verb}」後面不應有其他內容，${FORMAT_HINT}` };
+    if (left.length < 2) return { ok: false, message: `${verb}至少要寫兩位球員，例如「AB${verb}」` };
+    const grant: Grant = { kind: verb === '平打' ? 'even' : 'none' };
+    return { ok: true, entries: allPairs([...left].sort()).map((pair) => ({ pair, grant })) };
   }
 
   const recv = /^([A-Z]+)(.*)$/.exec(rest);
@@ -225,21 +224,27 @@ export function completeMatrix(matrix: HandicapMatrix, seats: readonly Seat[]): 
 }
 
 /**
- * 依目前的球員人數整理讓桿文字：去掉不存在的座位、沒寫到的配對明確寫成平打。
- * 文字本身有錯誤（不看座位數）時原樣回傳，交給使用者修正。
+ * 依目前的座位整理讓桿文字：去掉不存在的座位、沒寫到的配對明確寫成 fallback（預設平打）。
+ * 文字本身有錯誤（不看座位）時原樣回傳，交給使用者修正。
  */
-export function normalizeForSeats(text: string, seats: readonly Seat[]): string {
+export function normalizeForSeats(text: string, seats: readonly Seat[], fallback: Grant = { kind: 'even' }): string {
   const all = parseHandicap(text, SEATS);
   if (!all.ok) return text;
   const pairs = allPairs(seats);
   const m: HandicapMatrix = {};
-  for (const p of pairs) m[p] = all.matrix[p] ?? { kind: 'even' };
+  for (const p of pairs) m[p] = all.matrix[p] ?? fallback;
   return formatMatrix(m, seats);
+}
+
+/** 這一對是否要比輸贏 */
+export function isActive(grant: Grant | undefined): boolean {
+  return grant?.kind !== 'none';
 }
 
 /** 單一配對轉回簡寫，例如 "A讓B前2後4" */
 export function formatGrant(pair: PairKey, grant: Grant): string {
   const g = normalizeGrant(grant);
+  if (g.kind === 'none') return `${pair}不抓`;
   if (g.kind === 'even') return `${pair}平打`;
   if (g.kind === 'full') return `${g.giver}讓${g.receiver}${g.n}`;
   const f = g.front ? `前${g.front}` : '';
@@ -259,6 +264,7 @@ export function formatMatrix(matrix: HandicapMatrix, seats: readonly Seat[]): st
 export function describeGrant(pair: PairKey, grant: Grant | undefined, names?: Partial<Record<Seat, string>>): string {
   const n = (s: Seat) => names?.[s] ?? s;
   const g = grant ? normalizeGrant(grant) : { kind: 'even' as const };
+  if (g.kind === 'none') return `${n(pair[0] as Seat)} 與 ${n(pair[1] as Seat)} 不抓`;
   if (g.kind === 'even') return `${n(pair[0] as Seat)} 與 ${n(pair[1] as Seat)} 平打`;
   if (g.kind === 'full') return `${n(g.giver)} 讓 ${n(g.receiver)} 全場 ${g.n} 桿`;
   return `${n(g.giver)} 讓 ${n(g.receiver)} 前九 ${g.front} 桿、後九 ${g.back} 桿`;

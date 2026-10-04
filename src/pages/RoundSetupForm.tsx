@@ -5,14 +5,15 @@ import { useApi } from '@/app/auth';
 import { BetEditor, betProblems } from '@/components/BetEditor';
 import { HandicapEditor, useHandicapParse, type Preset } from '@/components/HandicapEditor';
 import { APP_CONFIG, STROKE_MODE_LABEL, TIE_RULE_LABEL } from '@/engine/config';
-import { describeGrant, normalizeForSeats } from '@/engine/handicap/parser';
-import { allPairs, seatsFor } from '@/engine/pairs';
+import { describeGrant, isActive, normalizeForSeats } from '@/engine/handicap/parser';
+import { allPairs, flightOf, seatAt } from '@/engine/pairs';
 import type { BetConfig } from '@/engine/games/registry';
-import { SEATS, SEGMENT_LABEL, type Seat, type Segment } from '@/engine/types';
+import { FLIGHT_SIZE, SEGMENT_LABEL, type Grant, type Seat, type Segment } from '@/engine/types';
 
 export interface SetupInitial {
   date: string;
-  playerIds: number[];
+  /** 每組的球員 id（依成績卡順序）；第 1 組座位 A~D、第 2 組 E~H */
+  groups: number[][];
   courseId: number | null;
   courseName: string;
   handicapText: string;
@@ -29,7 +30,7 @@ interface Props {
   presets: Preset[];
 }
 
-const STEPS = ['球員與球場', '讓桿', '賭注', '確認'];
+const STEPS = ['球員與球場', '抓球與讓桿', '賭注', '確認'];
 
 export function RoundSetupForm({ roundId, initial, players: initialPlayers, courses, presets: initialPresets }: Props) {
   const navigate = useNavigate();
@@ -39,7 +40,7 @@ export function RoundSetupForm({ roundId, initial, players: initialPlayers, cour
   const [players, setPlayers] = useState(initialPlayers);
   const [presets, setPresets] = useState(initialPresets);
   const [date, setDate] = useState(initial.date);
-  const [playerIds, setPlayerIds] = useState(initial.playerIds);
+  const [groups, setGroups] = useState<number[][]>(initial.groups.length ? initial.groups : [[]]);
   const [courseId, setCourseId] = useState<number | null>(initial.courseId);
   const [courseName, setCourseName] = useState(initial.courseName);
   const [text, setText] = useState(initial.handicapText);
@@ -55,23 +56,33 @@ export function RoundSetupForm({ roundId, initial, players: initialPlayers, cour
   const [errors, setErrors] = useState<string[]>([]);
   const [pending, start] = useTransition();
 
-  const seats: Seat[] = useMemo(
-    () => (playerIds.length >= 2 ? seatsFor(playerIds.length) : SEATS.slice(0, Math.max(playerIds.length, 0))),
-    [playerIds.length],
+  const playerIds = groups.flat();
+  const slots = useMemo(
+    () => groups.flatMap((ids, g) => ids.map((id, i) => ({ id, flight: g + 1, seat: seatAt(g + 1, i) }))),
+    [groups],
   );
+  const seats: Seat[] = useMemo(() => slots.map((x) => x.seat), [slots]);
+  const twoGroups = groups.length > 1 && groups[1].length > 0;
+  // 單組球局沒設定的配對預設平打（全部互抓）；兩組球局預設不抓，要抓的自己點
+  const fallback: Grant = twoGroups ? { kind: 'none' } : { kind: 'even' };
   const nameOf = (id: number) => players.find((p) => p.id === id)?.name ?? '?';
-  const names = Object.fromEntries(playerIds.map((id, i) => [SEATS[i], nameOf(id)])) as Record<Seat, string>;
+  const names = Object.fromEntries(slots.map((x) => [x.seat, nameOf(x.id)])) as Record<Seat, string>;
   const parsed = useHandicapParse(text, seats.length >= 2 ? seats : ['A', 'B']);
 
   const stepErrors = (s: number): string[] => {
     if (s === 0) {
       const e: string[] = [];
       if (!date) e.push('請選日期');
+      if (groups[0].length === 0) e.push('第 1 組至少要有 1 位球員');
       if (playerIds.length < APP_CONFIG.minPlayers) e.push(`至少選 ${APP_CONFIG.minPlayers} 位球員`);
       if (!courseName.trim()) e.push('請選擇或輸入球場');
       return e;
     }
-    if (s === 1) return parsed.ok ? [] : ['讓桿規則有錯誤，請修正紅色標示的行'];
+    if (s === 1) {
+      if (!parsed.ok) return ['讓桿規則有錯誤，請修正紅色標示的行'];
+      if (!allPairs(seats).some((p) => isActive(parsed.matrix[p]))) return ['請至少選一對抓球對象'];
+      return [];
+    }
     if (s === 2) return betProblems(bet);
     return [];
   };
@@ -80,25 +91,34 @@ export function RoundSetupForm({ roundId, initial, players: initialPlayers, cour
     const e = stepErrors(step);
     setErrors(e);
     if (!e.length) {
-      // 進入讓桿設定時，依目前人數整理：所有配對預設平打、去掉已不存在的座位
-      if (step === 0) setText((t) => normalizeForSeats(t, seats));
+      // 進入抓球與讓桿設定時，依目前的座位整理：去掉已不存在的座位、沒設定的配對補上預設
+      if (step === 0) setText((t) => normalizeForSeats(t, seats, fallback));
       setStep(step + 1);
       window.scrollTo({ top: 0 });
     }
   };
 
-  const togglePlayer = (id: number) => {
-    setPlayerIds((ids) =>
-      ids.includes(id) ? ids.filter((x) => x !== id) : ids.length < APP_CONFIG.maxPlayers ? [...ids, id] : ids,
+  const canAdd = (g: number) => groups[g].length < FLIGHT_SIZE;
+  const addTo = (g: number, id: number) =>
+    setGroups((gs) => gs.map((ids, i) => (i === g && ids.length < FLIGHT_SIZE && !gs.flat().includes(id) ? [...ids, id] : ids)));
+  const removePlayer = (id: number) => setGroups((gs) => gs.map((ids) => ids.filter((x) => x !== id)));
+  const move = (g: number, i: number, d: -1 | 1) =>
+    setGroups((gs) =>
+      gs.map((ids, k) => {
+        const j = i + d;
+        if (k !== g || j < 0 || j >= ids.length) return ids;
+        const next = [...ids];
+        [next[i], next[j]] = [next[j], next[i]];
+        return next;
+      }),
     );
-  };
-  const move = (i: number, d: -1 | 1) => {
-    const j = i + d;
-    if (j < 0 || j >= playerIds.length) return;
-    const ids = [...playerIds];
-    [ids[i], ids[j]] = [ids[j], ids[i]];
-    setPlayerIds(ids);
-  };
+  /** 把球員移到另一組（另一組還有位置時） */
+  const switchGroup = (g: number, id: number) =>
+    setGroups((gs) => {
+      const other = g === 0 ? 1 : 0;
+      if (!gs[other] || gs[other].length >= FLIGHT_SIZE) return gs;
+      return gs.map((ids, k) => (k === g ? ids.filter((x) => x !== id) : k === other ? [...ids, id] : ids));
+    });
   const addPlayer = () =>
     start(async () => {
       let created: { id: number; name: string };
@@ -109,14 +129,25 @@ export function RoundSetupForm({ roundId, initial, players: initialPlayers, cour
       }
       qc.invalidateQueries({ queryKey: ['players'] });
       setPlayers((ps) => [...ps, { ...created, active: true }]);
-      if (playerIds.length < APP_CONFIG.maxPlayers) setPlayerIds((ids) => [...ids, created.id]);
+      // 放進第一個還有位置的組
+      const g = groups.findIndex((ids) => ids.length < FLIGHT_SIZE);
+      if (g >= 0) addTo(g, created.id);
       setNewName('');
       setErrors([]);
     });
 
   const submit = () =>
     start(async () => {
-      const input = { date, playerIds, courseId, courseName, handicapText: text, matrix: parsed.matrix, bet };
+      const input = {
+        date,
+        playerIds: slots.map((x) => x.id),
+        flights: slots.map((x) => x.flight),
+        courseId,
+        courseName,
+        handicapText: text,
+        matrix: parsed.matrix,
+        bet,
+      };
       try {
         if (roundId) {
           await api.updateRoundSetup(roundId, input);
@@ -194,53 +225,95 @@ export function RoundSetupForm({ roundId, initial, players: initialPlayers, cour
             </div>
           </div>
 
-          <div className="card">
-            <div className="mb-1 font-bold">
-              球員（{playerIds.length}/{APP_CONFIG.maxPlayers}）
-            </div>
-            <p className="mb-3 text-xs text-gray-500">請依成績卡上的順序排列：第 1 位 = A、第 2 位 = B…</p>
-            {playerIds.length > 0 && (
-              <ul className="mb-3 space-y-2">
-                {playerIds.map((id, i) => (
-                  <li key={id} className="flex items-center gap-2 rounded-xl bg-brand-50 px-3 py-2">
-                    <span className="flex h-8 w-8 items-center justify-center rounded-full bg-brand-600 font-bold text-white">
-                      {SEATS[i]}
-                    </span>
-                    <span className="flex-1 font-semibold">{nameOf(id)}</span>
-                    <button type="button" className="px-2 text-xl text-gray-500 disabled:opacity-20" onClick={() => move(i, -1)} disabled={i === 0}>
-                      ↑
-                    </button>
-                    <button
-                      type="button"
-                      className="px-2 text-xl text-gray-500 disabled:opacity-20"
-                      onClick={() => move(i, 1)}
-                      disabled={i === playerIds.length - 1}
-                    >
-                      ↓
-                    </button>
-                    <button type="button" className="px-2 text-xl text-gray-400" onClick={() => togglePlayer(id)}>
-                      ×
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <div className="flex flex-wrap gap-2">
-              {players
-                .filter((p) => p.active && !playerIds.includes(p.id))
-                .map((p) => (
+          {groups.map((ids, g) => (
+            <div key={g} className="card">
+              <div className="mb-1 flex items-center justify-between">
+                <span className="font-bold">
+                  {groups.length > 1 ? `第 ${g + 1} 組` : '球員'}（{ids.length}/{FLIGHT_SIZE}）
+                </span>
+                {g === 1 && (
                   <button
-                    key={p.id}
                     type="button"
-                    className="rounded-full bg-gray-100 px-4 py-2 text-sm font-medium active:bg-gray-200 disabled:opacity-40"
-                    onClick={() => togglePlayer(p.id)}
-                    disabled={playerIds.length >= APP_CONFIG.maxPlayers}
+                    className="text-sm text-gray-400"
+                    onClick={() => (ids.length === 0 || confirm('移除第 2 組？')) && setGroups((gs) => gs.slice(0, 1))}
                   >
-                    ＋ {p.name}
+                    移除這一組
                   </button>
-                ))}
+                )}
+              </div>
+              <p className="mb-3 text-xs text-gray-500">
+                請依這一組成績卡上的順序排列：第 1 位 = {seatAt(g + 1, 0)}、第 2 位 = {seatAt(g + 1, 1)}…
+              </p>
+              {ids.length > 0 && (
+                <ul className="mb-3 space-y-2">
+                  {ids.map((id, i) => (
+                    <li key={id} className="flex items-center gap-1 rounded-xl bg-brand-50 px-3 py-2">
+                      <span className="mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-600 font-bold text-white">
+                        {seatAt(g + 1, i)}
+                      </span>
+                      <span className="flex-1 truncate font-semibold">{nameOf(id)}</span>
+                      {groups.length > 1 && (
+                        <button
+                          type="button"
+                          className="min-h-9 rounded-lg px-2 text-xs text-brand-700 disabled:opacity-30"
+                          onClick={() => switchGroup(g, id)}
+                          disabled={groups[g === 0 ? 1 : 0].length >= FLIGHT_SIZE}
+                        >
+                          移到第 {g === 0 ? 2 : 1} 組
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="px-2 text-xl text-gray-500 disabled:opacity-20"
+                        onClick={() => move(g, i, -1)}
+                        disabled={i === 0}
+                        aria-label="上移"
+                      >
+                        ↑
+                      </button>
+                      <button
+                        type="button"
+                        className="px-2 text-xl text-gray-500 disabled:opacity-20"
+                        onClick={() => move(g, i, 1)}
+                        disabled={i === ids.length - 1}
+                        aria-label="下移"
+                      >
+                        ↓
+                      </button>
+                      <button type="button" className="px-2 text-xl text-gray-400" onClick={() => removePlayer(id)} aria-label="移除">
+                        ×
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div className="flex flex-wrap gap-2">
+                {players
+                  .filter((p) => p.active && !playerIds.includes(p.id))
+                  .map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      className="rounded-full bg-gray-100 px-4 py-2 text-sm font-medium active:bg-gray-200 disabled:opacity-40"
+                      onClick={() => addTo(g, p.id)}
+                      disabled={!canAdd(g)}
+                    >
+                      ＋ {p.name}
+                    </button>
+                  ))}
+              </div>
             </div>
-            <div className="mt-3 flex gap-2">
+          ))}
+
+          {groups.length < APP_CONFIG.maxFlights && (
+            <button type="button" className="btn-secondary w-full" onClick={() => setGroups((gs) => [...gs, []])}>
+              ＋ 加第 2 組（跨組抓球）
+            </button>
+          )}
+
+          <div className="card">
+            <label className="label">名單裡沒有的球友</label>
+            <div className="flex gap-2">
               <input className="field" placeholder="新球友名字" value={newName} onChange={(e) => setNewName(e.target.value)} />
               <button type="button" className="btn-secondary shrink-0" onClick={addPlayer} disabled={pending || !newName.trim()}>
                 新增
@@ -253,6 +326,7 @@ export function RoundSetupForm({ roundId, initial, players: initialPlayers, cour
       {step === 1 && (
         <HandicapEditor
           hcpIndex={hcpIndex}
+          fallback={fallback}
           seats={seats}
           names={names}
           text={text}
@@ -273,24 +347,42 @@ export function RoundSetupForm({ roundId, initial, players: initialPlayers, cour
             <div className="font-bold">
               {date}・{courseName}
             </div>
-            <ul className="mt-2 space-y-1">
-              {playerIds.map((id, i) => (
-                <li key={id}>
-                  <b className="text-brand-700">{SEATS[i]}</b> {nameOf(id)}
-                </li>
-              ))}
-            </ul>
+            {groups.map((ids, g) =>
+              ids.length === 0 ? null : (
+                <div key={g} className="mt-2">
+                  {twoGroups && <div className="text-xs text-gray-500">第 {g + 1} 組</div>}
+                  <ul className="space-y-1">
+                    {ids.map((id, i) => (
+                      <li key={id}>
+                        <b className="text-brand-700">{seatAt(g + 1, i)}</b> {nameOf(id)}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ),
+            )}
           </div>
           <div className="card">
-            <div className="mb-2 font-bold">讓桿</div>
+            <div className="mb-2 font-bold">
+              抓球與讓桿（{allPairs(seats).filter((p) => isActive(parsed.matrix[p])).length} 對）
+            </div>
             <ul className="space-y-1 text-sm">
-              {allPairs(seats).map((p) => (
-                <li key={p} className={parsed.unspecified.includes(p) ? 'text-amber-600' : ''}>
-                  ・{describeGrant(p, parsed.matrix[p], names)}
-                  {parsed.unspecified.includes(p) && '（未設定）'}
-                </li>
-              ))}
+              {allPairs(seats)
+                .filter((p) => isActive(parsed.matrix[p]))
+                .map((p) => (
+                  <li key={p}>
+                    ・{describeGrant(p, parsed.matrix[p], names)}
+                    {twoGroups && flightOf(p[0] as Seat) !== flightOf(p[1] as Seat) && (
+                      <span className="ml-1 text-xs text-amber-600">跨組</span>
+                    )}
+                  </li>
+                ))}
             </ul>
+            {allPairs(seats).some((p) => !isActive(parsed.matrix[p])) && (
+              <p className="mt-2 text-xs text-gray-400">
+                其餘 {allPairs(seats).filter((p) => !isActive(parsed.matrix[p])).length} 對不抓
+              </p>
+            )}
           </div>
           <div className="card text-sm">
             <div className="mb-2 font-bold">賭注</div>

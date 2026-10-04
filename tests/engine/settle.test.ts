@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseHandicap } from '@/engine/handicap/parser';
+import { normalizeForSeats, parseHandicap } from '@/engine/handicap/parser';
 import { defaultBetConfig, validateBetConfig, type BetConfig } from '@/engine/games/registry';
 import { settleRound, type Settlement } from '@/engine/settle';
 import { suggestPayments } from '@/engine/payments';
@@ -114,7 +114,7 @@ describe('四人兩兩配對結算', () => {
 });
 
 describe('付款建議', () => {
-  const count = (b: Record<Seat, number>) => suggestPayments(b).length;
+  const count = (b: Record<string, number>) => suggestPayments(b).length;
 
   it('兩組各自結清只需 2 筆', () => {
     expect(count({ A: 100, B: -100, C: 50, D: -50 })).toBe(2);
@@ -168,5 +168,63 @@ describe('LINE 摘要', () => {
     expect(text).toContain('阿明　+2 點（+200 元）');
     expect(text).toContain('大華 → 阿明　200 元');
     expect(text).toContain('阿明 vs 大華：比洞 +1、總桿 +1 → +2');
+  });
+});
+
+describe('兩組八人、只抓指定的人', () => {
+  const seats8: Seat[] = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
+  const scores8 = {
+    ...scores,
+    E: card({ 2: 1, 6: 1, 11: -1 }),
+    F: card({ 1: 1, 3: 2, 9: 1, 12: 1, 16: 2 }),
+    G: card({ 4: 2, 5: 1, 8: 1, 10: 2, 14: 1, 17: 2 }),
+    H: card({ 1: 2, 2: 2, 7: 3, 9: 2, 13: 2, 15: 3, 18: 3 }),
+  };
+  // 同組互抓（第 2 組只有 EF、GH 抓）＋ 跨組 A-E、B讓F5、D-H
+  const text = [
+    'AB平打', 'AB讓C前3後3', 'AB讓D18', 'C讓D5',
+    'EF平打', 'GH平打', 'EG不抓', 'EH不抓', 'FG不抓', 'FH不抓',
+    'AE平打', 'B讓F5', 'DH平打',
+  ].join('\n');
+  const matrix8 = parseHandicap(normalizeForSeats(text, seats8, { kind: 'none' }), seats8).matrix;
+
+  it('只計算要抓的配對，總和為 0，付款後全員結清', () => {
+    const r = settleRound({ seats: seats8, course, scores: scores8, matrix: matrix8, bet: bet((b) => (b.games.match.options.tie = 'carry')) });
+    if (!r.ok) throw new Error(r.errors.join());
+    const s = r.settlement;
+    expect(s.pairs.map((p) => p.pair)).toEqual(['AB', 'AC', 'AD', 'AE', 'BC', 'BD', 'BF', 'CD', 'DH', 'EF', 'GH']);
+    expect(Object.values(s.points).reduce((a, b) => a + b, 0)).toBe(0);
+    expect(Object.keys(s.points)).toHaveLength(8);
+    expect(Object.values(applyPayments(s)).every((v) => Math.abs(v) < 0.01)).toBe(true);
+    expect(s.payments.length).toBeLessThanOrEqual(7);
+  });
+
+  it('不抓的配對不影響其他人：G 只跟 H 抓，兩人輸贏互為相反數', () => {
+    const r = settleRound({ seats: seats8, course, scores: scores8, matrix: matrix8, bet: bet() });
+    if (!r.ok) throw new Error(r.errors.join());
+    const gh = r.settlement.pairs.find((p) => p.pair === 'GH')!;
+    expect(r.settlement.points.G).toBe(gh.points);
+  });
+
+  it('把一對改成不抓，兩人的點數各少掉那一對的輸贏', () => {
+    const base = settleRound({ seats: SEATS4, course, scores, matrix, bet: bet() });
+    const without = settleRound({ seats: SEATS4, course, scores, matrix: { ...matrix, AB: { kind: 'none' } }, bet: bet() });
+    if (!base.ok || !without.ok) throw new Error();
+    const ab = base.settlement.pairs.find((p) => p.pair === 'AB')!.points;
+    expect(without.settlement.pairs.map((p) => p.pair)).not.toContain('AB');
+    expect(without.settlement.points.A).toBe(base.settlement.points.A - ab);
+    expect(without.settlement.points.B).toBe(base.settlement.points.B + ab);
+    expect(without.settlement.points.C).toBe(base.settlement.points.C);
+  });
+
+  it('全部不抓時不能結算', () => {
+    const none = parseHandicap(normalizeForSeats('', SEATS4, { kind: 'none' }), SEATS4).matrix;
+    const r = settleRound({ seats: SEATS4, course, scores, matrix: none, bet: bet() });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errors[0]).toContain('抓球對象');
+  });
+
+  it('八人付款建議：四付四收、可兩兩結清時只需 4 筆', () => {
+    expect(suggestPayments({ A: 100, B: -100, C: 50, D: -50, E: 30, F: -30, G: 20, H: -20 })).toHaveLength(4);
   });
 });

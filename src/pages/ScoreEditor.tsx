@@ -9,7 +9,7 @@ import type { Seat } from '@/engine/types';
 interface Props {
   roundId: number;
   courseName: string;
-  players: { seat: Seat; name: string; scores: Holes }[];
+  players: { seat: Seat; flight: number; name: string; scores: Holes }[];
   course: { pars: number[]; hcpIndex: number[] } | null;
 }
 
@@ -41,7 +41,13 @@ export function ScoreEditor({ roundId, courseName, players, course }: Props) {
   const backend = useBackend();
   const qc = useQueryClient();
   const recognitionEnabled = backend.recognitionAvailable;
-  const seats = players.map((p) => p.seat);
+  // 一組一張成績卡：依組別分頁顯示，每組各自上傳辨識；儲存時所有組一起存
+  const flights = [...new Set(players.map((p) => p.flight))].sort();
+  const [flight, setFlight] = useState(flights[0]);
+  const shown = players.filter((p) => p.flight === flight);
+  const seats = shown.map((p) => p.seat);
+  const missingIn = (f: number) =>
+    players.filter((p) => p.flight === f).reduce((c, p) => c + scores[p.seat].filter((v) => v === null).length, 0);
   const [scores, setScores] = useState<Record<Seat, Holes>>(
     () => Object.fromEntries(players.map((p) => [p.seat, [...p.scores]])) as Record<Seat, Holes>,
   );
@@ -73,14 +79,14 @@ export function ScoreEditor({ roundId, courseName, players, course }: Props) {
     try {
       const blob = await resizeImage(file);
       // 照片存檔失敗不影響辨識
-      const stored = api.attachScorecard(roundId, blob).then(
+      const stored = api.attachScorecard(roundId, blob, flight).then(
         () => qc.invalidateQueries({ queryKey: ['round', roundId] }),
         () => setMessage({ tone: 'error', text: ['成績卡照片存檔失敗（不影響辨識）'] }),
       );
       const r = await backend.recognize({
         imageBase64: await blobToBase64(blob),
         mediaType: 'image/jpeg',
-        playerNames: players.map((p) => p.name),
+        playerNames: shown.map((p) => p.name),
         needCourse,
       });
       await stored;
@@ -159,12 +165,38 @@ export function ScoreEditor({ roundId, courseName, players, course }: Props) {
 
   return (
     <div className="space-y-4">
+      {flights.length > 1 && (
+        <div className="flex gap-2">
+          {flights.map((f) => {
+            const missing = missingIn(f);
+            return (
+              <button
+                key={f}
+                type="button"
+                onClick={() => {
+                  setFlight(f);
+                  setRecognized(null);
+                }}
+                className={`min-h-11 flex-1 rounded-xl text-sm ring-1 ${
+                  f === flight ? 'bg-brand-600 font-bold text-white ring-brand-600' : 'bg-white ring-gray-300'
+                }`}
+              >
+                第 {f} 組
+                <span className={`ml-1 text-xs ${f === flight ? 'text-white/80' : missing ? 'text-amber-600' : 'text-brand-600'}`}>
+                  {missing ? `（缺 ${missing} 格）` : '（已填完）'}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       <div className="card">
         {recognitionEnabled ? (
           <>
             <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={(e) => onFile(e.target.files?.[0])} />
             <button type="button" className="btn-primary w-full py-4" onClick={() => fileRef.current?.click()} disabled={recognizing}>
-              {recognizing ? '辨識中，請稍候…' : '📷 拍照 / 上傳成績卡'}
+              {recognizing ? '辨識中，請稍候…' : flights.length > 1 ? `📷 拍照 / 上傳第 ${flight} 組成績卡` : '📷 拍照 / 上傳成績卡'}
             </button>
             <p className="mt-2 text-xs text-gray-500">
               辨識後可逐格核對修改；也可以直接在下表手動輸入。
@@ -227,7 +259,7 @@ export function ScoreEditor({ roundId, courseName, players, course }: Props) {
               <th className="w-9 py-2">洞</th>
               <th className={needCourse ? 'w-12' : 'w-9'}>Par</th>
               <th className={needCourse ? 'w-12' : 'w-9'}>差點</th>
-              {players.map((p) => (
+              {shown.map((p) => (
                 <th key={p.seat} className="truncate px-0.5 text-sm text-gray-900">
                   <div className="text-xs text-brand-700">{p.seat}</div>
                   <div className="truncate">{p.name}</div>

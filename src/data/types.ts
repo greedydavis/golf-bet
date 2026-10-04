@@ -50,6 +50,8 @@ export interface Preset {
 
 export interface RoundPlayer {
   seat: Seat;
+  /** 第幾組（1 或 2）；第 1 組座位 A~D、第 2 組 E~H */
+  flight: number;
   playerId: number;
   name: string;
   scores: Scores;
@@ -76,13 +78,16 @@ export interface RoundDetail extends RoundListItem {
   handicapText: string;
   matrix: HandicapMatrix;
   bet: BetConfig;
-  scorecardImage: string | null;
+  /** 每組一張成績卡照片：[第 1 組, 第 2 組] */
+  scorecardImages: (string | null)[];
 }
 
 /** 開局 / 修改設定送出的內容 */
 export interface RoundSetupInput {
   date: string;
+  /** 依成績卡順序；flights 是對應的組別（1 或 2） */
   playerIds: number[];
+  flights: number[];
   courseId: number | null;
   courseName: string;
   handicapText: string;

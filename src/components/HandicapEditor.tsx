@@ -1,14 +1,16 @@
-// 讓桿設定：每一對球員一列，用點選設定（平打 / 誰讓誰、全場 / 前後九、− + 調桿數）。
-// 文字簡寫收在「進階」裡；兩者共用同一份讓桿文字，任一邊修改另一邊會同步。
+// 抓球對象與讓桿設定
+//   1. 抓球對象：表格點選誰跟誰抓（不抓的配對不比輸贏）
+//   2. 讓桿：每一對要抓的球員一列，點選平打 / 誰讓誰、全場 / 前後九、− + 調桿數
+// 文字簡寫收在「進階」裡；全部共用同一份讓桿文字，任一邊修改另一邊會同步。
 
 import { useMemo, useState, useTransition } from 'react';
 import { useApi } from '@/app/auth';
 import type { Preset } from '@/data/types';
 import { APP_CONFIG } from '@/engine/config';
-import { formatMatrix, normalizeForSeats, normalizeGrant, parseHandicap, type ParseResult } from '@/engine/handicap/parser';
 import { fullToSplit } from '@/engine/handicap/allocate';
-import { allPairs } from '@/engine/pairs';
-import type { Grant, HandicapMatrix, PairKey, Seat } from '@/engine/types';
+import { formatMatrix, isActive, normalizeForSeats, normalizeGrant, parseHandicap, type ParseResult } from '@/engine/handicap/parser';
+import { allPairs, flightOf, pairKey } from '@/engine/pairs';
+import { SEATS, type Grant, type HandicapMatrix, type PairKey, type Seat } from '@/engine/types';
 
 export type { Preset };
 
@@ -21,19 +23,28 @@ interface Props {
   onPresetsChange: (p: Preset[]) => void;
   /** 球場差點洞序；知道時，全場切換成前後九會依實際落點換算 */
   hcpIndex?: number[] | null;
+  /** 沒寫到的配對要補成什麼：單組球局平打、兩組球局不抓 */
+  fallback: Grant;
 }
 
 export function useHandicapParse(text: string, seats: Seat[]): ParseResult {
   return useMemo(() => parseHandicap(text, seats), [text, seats]);
 }
 
-export function HandicapEditor({ seats, names, text, onTextChange, presets, onPresetsChange, hcpIndex }: Props) {
+const sameFlight = (pair: PairKey) => flightOf(pair[0] as Seat) === flightOf(pair[1] as Seat);
+
+export function HandicapEditor({ seats, names, text, onTextChange, presets, onPresetsChange, hcpIndex, fallback }: Props) {
   const parsed = useHandicapParse(text, seats);
   const [showText, setShowText] = useState(!parsed.ok);
   const [presetName, setPresetName] = useState('');
   const [presetMsg, setPresetMsg] = useState('');
   const [pending, start] = useTransition();
   const api = useApi();
+
+  const pairs = allPairs(seats);
+  const multi = new Set(seats.map(flightOf)).size > 1;
+  const grantOf = (p: PairKey): Grant => parsed.matrix[p] ?? { kind: 'even' };
+  const activePairs = pairs.filter((p) => isActive(grantOf(p)));
 
   const lines = text.split(/\r?\n/);
   const issuesByLine = new Map<number, string[]>();
@@ -43,20 +54,21 @@ export function HandicapEditor({ seats, names, text, onTextChange, presets, onPr
   const errorLines = new Set(parsed.errors.map((e) => e.line));
 
   // 點選修改：以目前解析結果為準重寫文字，所有配對都明確寫出
-  const setGrant = (pair: PairKey, grant: Grant) => {
+  const rewrite = (change: (p: PairKey, g: Grant) => Grant) => {
     const m: HandicapMatrix = {};
-    for (const p of allPairs(seats)) m[p] = parsed.matrix[p] ?? { kind: 'even' };
-    m[pair] = grant;
+    for (const p of pairs) m[p] = change(p, grantOf(p));
     onTextChange(formatMatrix(m, seats));
   };
+  const setGrant = (pair: PairKey, grant: Grant) => rewrite((p, g) => (p === pair ? grant : g));
+  const togglePair = (pair: PairKey) => setGrant(pair, isActive(grantOf(pair)) ? { kind: 'none' } : { kind: 'even' });
 
   const loadPreset = (id: string) => {
     const p = presets.find((x) => String(x.id) === id);
     if (!p) return;
-    // 預設組合不綁座位：人數比組合少時略過不存在的座位
-    const all = parseHandicap(p.text, ['A', 'B', 'C', 'D']);
+    // 預設組合不綁座位：略過這場沒有的座位，沒寫到的配對依球局預設補上
+    const all = parseHandicap(p.text, SEATS);
     const skipped = all.ok && Object.keys(all.matrix).some((k) => ![...k].every((c) => seats.includes(c as Seat)));
-    onTextChange(normalizeForSeats(p.text, seats));
+    onTextChange(normalizeForSeats(p.text, seats, fallback));
     setPresetName(p.name);
     setPresetMsg(`已帶入「${p.name}」${skipped ? '（已略過本場沒有的座位）' : ''}`);
   };
@@ -99,30 +111,77 @@ export function HandicapEditor({ seats, names, text, onTextChange, presets, onPr
               </button>
             ))}
           </div>
+          {presetMsg.startsWith('已帶入') && <p className="mt-2 text-sm text-gray-600">{presetMsg}</p>}
         </div>
       )}
 
-      <div className="card">
-        <div className="mb-3 font-bold">讓桿設定</div>
-        {!parsed.ok ? (
+      {!parsed.ok ? (
+        <div className="card">
           <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">
             下方文字規則有錯誤，請先修正（或清空文字）才能用點選設定。
           </p>
-        ) : (
-          <ul className="space-y-3">
-            {allPairs(seats).map((p) => (
-              <PairRow
-                key={p}
-                pair={p}
-                names={names}
-                grant={parsed.matrix[p]}
-                hcpIndex={hcpIndex ?? null}
-                onChange={(g) => setGrant(p, g)}
-              />
-            ))}
-          </ul>
-        )}
-      </div>
+        </div>
+      ) : (
+        <>
+          <div className="card px-2">
+            <div className="mb-1 flex items-baseline justify-between px-2">
+              <span className="font-bold">抓球對象</span>
+              <span className="text-sm text-gray-500">
+                要抓 <b className="text-brand-700">{activePairs.length}</b> / {pairs.length} 對
+              </span>
+            </div>
+            <p className="mb-2 px-2 text-xs text-gray-500">點格子決定誰跟誰抓，綠色打勾 = 要抓。</p>
+            <BetGrid seats={seats} names={names} isOn={(p) => isActive(grantOf(p))} onToggle={togglePair} />
+            <div className="mt-3 flex flex-wrap gap-2 px-2">
+              {multi && (
+                <button
+                  type="button"
+                  className="btn-secondary min-h-9 px-3 text-sm"
+                  onClick={() => rewrite((p, g) => (sameFlight(p) && !isActive(g) ? { kind: 'even' } : g))}
+                >
+                  同組互抓
+                </button>
+              )}
+              <button
+                type="button"
+                className="btn-secondary min-h-9 px-3 text-sm"
+                onClick={() => rewrite((_, g) => (isActive(g) ? g : { kind: 'even' }))}
+              >
+                全部互抓
+              </button>
+              <button
+                type="button"
+                className="btn-secondary min-h-9 px-3 text-sm"
+                disabled={activePairs.length === 0}
+                onClick={() => confirm('清除所有抓球對象？已設定的讓桿也會清掉。') && rewrite(() => ({ kind: 'none' }))}
+              >
+                全部清除
+              </button>
+            </div>
+          </div>
+
+          <div className="card">
+            <div className="mb-3 font-bold">讓桿設定</div>
+            {activePairs.length === 0 ? (
+              <p className="py-3 text-center text-sm text-gray-400">先在上面的表格點選要抓的對象</p>
+            ) : (
+              <ul className="space-y-3">
+                {activePairs.map((p) => (
+                  <PairRow
+                    key={p}
+                    pair={p}
+                    names={names}
+                    grant={grantOf(p)}
+                    hcpIndex={hcpIndex ?? null}
+                    crossFlight={multi && !sameFlight(p)}
+                    onChange={(g) => setGrant(p, g)}
+                  />
+                ))}
+              </ul>
+            )}
+          </div>
+        </>
+      )}
 
       <div className="card">
         <button type="button" className="flex w-full items-center justify-between text-left" onClick={() => setShowText(!showText)}>
@@ -141,10 +200,10 @@ export function HandicapEditor({ seats, names, text, onTextChange, presets, onPr
               spellCheck={false}
             />
             <ul className="mt-2 list-inside list-disc space-y-0.5 text-xs text-gray-500">
-              <li>AB平打：A、B 不讓桿</li>
+              <li>AB平打：A、B 不讓桿；AE不抓：A、E 不比輸贏</li>
               <li>AB讓D18：A、B 各讓 D 全場 18 桿；A讓CD5：A 各讓 C、D 5 桿</li>
               <li>A讓B前2後4：前九 2 桿、後九 4 桿（可只寫一半，如 A讓B前3）</li>
-              <li>沒寫到的配對以平打計算</li>
+              <li>第 1 組座位 A~D、第 2 組 E~H；沒寫到的配對以平打計算</li>
             </ul>
             {issuesByLine.size > 0 && (
               <ol className="mt-3 space-y-1 text-sm">
@@ -183,7 +242,7 @@ export function HandicapEditor({ seats, names, text, onTextChange, presets, onPr
             儲存
           </button>
         </div>
-        {presetMsg && <p className="mt-2 text-sm text-gray-600">{presetMsg}</p>}
+        {presetMsg && !presetMsg.startsWith('已帶入') && <p className="mt-2 text-sm text-gray-600">{presetMsg}</p>}
         {presets.length > 0 && (
           <ul className="mt-3 flex flex-wrap gap-2 text-sm">
             {presets.map((p) => (
@@ -198,6 +257,66 @@ export function HandicapEditor({ seats, names, text, onTextChange, presets, onPr
         )}
       </div>
     </div>
+  );
+}
+
+/** 抓球對象表格：列與欄都是球員，點格子切換這一對要不要抓；兩組之間用粗線隔開 */
+function BetGrid({
+  seats,
+  names,
+  isOn,
+  onToggle,
+}: {
+  seats: Seat[];
+  names: Record<Seat, string>;
+  isOn: (p: PairKey) => boolean;
+  onToggle: (p: PairKey) => void;
+}) {
+  const firstOfFlight2 = seats.find((s) => flightOf(s) === 2);
+  const edge = (s: Seat, side: 'l' | 't') => (s === firstOfFlight2 ? (side === 'l' ? 'border-l-2 border-l-gray-400' : 'border-t-2 border-t-gray-400') : '');
+  return (
+    <table className="w-full table-fixed border-collapse text-center text-sm">
+      <thead>
+        <tr>
+          <th className="w-[4.5rem]" />
+          {seats.map((s) => (
+            <th key={s} className={`px-0 pb-1 font-semibold ${edge(s, 'l')}`}>
+              <div className="text-xs text-brand-700">{s}</div>
+              <div className="truncate text-xs font-normal text-gray-600">{names[s]}</div>
+            </th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {seats.map((row) => (
+          <tr key={row} className={edge(row, 't')}>
+            <th className="truncate pr-1 text-left text-xs font-normal">
+              <b className="text-brand-700">{row}</b> {names[row]}
+            </th>
+            {seats.map((col) => {
+              if (row === col) return <td key={col} className={`bg-gray-100 ${edge(col, 'l')}`} />;
+              const pair = pairKey(row, col);
+              const on = isOn(pair);
+              return (
+                <td key={col} className={`p-0.5 ${edge(col, 'l')}`}>
+                  <button
+                    type="button"
+                    aria-label={`${names[row]} 與 ${names[col]}${on ? '：要抓' : '：不抓'}`}
+                    aria-pressed={on}
+                    onClick={() => onToggle(pair)}
+                    className={`h-10 w-full rounded-md text-base font-bold ${
+                      on ? 'bg-brand-600 text-white' : 'bg-white text-gray-300 ring-1 ring-gray-200 ring-inset active:bg-gray-100'
+                    }`}
+                  >
+                    {on ? '✓' : ''}
+                  </button>
+                </td>
+              );
+            })}
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
@@ -256,7 +375,7 @@ function Stepper({ value, min, onChange, label }: { value: number; min: number; 
 }
 
 /**
- * 一對球員的讓桿。讓桿數維持至少 1 桿（0 桿等於平打），
+ * 一對要抓的球員的讓桿。讓桿數維持至少 1 桿（0 桿等於平打），
  * 讓畫面狀態可以完全由讓桿文字還原。
  */
 function PairRow({
@@ -264,17 +383,19 @@ function PairRow({
   names,
   grant,
   hcpIndex,
+  crossFlight,
   onChange,
 }: {
   pair: PairKey;
   names: Record<Seat, string>;
-  grant?: Grant;
+  grant: Grant;
   hcpIndex: number[] | null;
+  crossFlight: boolean;
   onChange: (g: Grant) => void;
 }) {
   const [x, y] = [pair[0] as Seat, pair[1] as Seat];
-  const g = grant ? normalizeGrant(grant) : ({ kind: 'even' } as const);
-  const giver = g.kind === 'even' ? null : g.giver;
+  const g = normalizeGrant(grant);
+  const giver = g.kind === 'full' || g.kind === 'split' ? g.giver : null;
   const receiverOf = (s: Seat) => (s === x ? y : x);
 
   const setGiver = (s: Seat | null) => {
@@ -284,21 +405,26 @@ function PairRow({
   };
 
   const setMode = (mode: 'full' | 'split') => {
-    if (!giver || g.kind === 'even' || g.kind === mode) return;
-    const r = receiverOf(giver);
+    if (g.kind === mode) return;
     if (mode === 'split' && g.kind === 'full') {
       // 全場 N 換成前後九：知道差點洞序就依實際落點換算（前九維持打球當下的讓桿），否則平均分、前九多一桿
       const { front, back } = hcpIndex ? fullToSplit(g.n, hcpIndex) : { front: Math.ceil(g.n / 2), back: Math.floor(g.n / 2) };
-      onChange({ kind: 'split', giver, receiver: r, front, back });
+      onChange({ kind: 'split', giver: g.giver, receiver: g.receiver, front, back });
     } else if (mode === 'full' && g.kind === 'split') {
-      onChange({ kind: 'full', giver, receiver: r, n: Math.max(1, g.front + g.back) });
+      onChange({ kind: 'full', giver: g.giver, receiver: g.receiver, n: Math.max(1, g.front + g.back) });
     }
   };
 
   return (
     <li className="rounded-xl bg-gray-50 p-3">
-      <div className="mb-2 text-sm font-semibold">
-        {names[x]} <span className="text-gray-400">vs</span> {names[y]}
+      <div className="mb-2 flex items-center gap-2 text-sm font-semibold">
+        <span>
+          {names[x]} <span className="text-gray-400">vs</span> {names[y]}
+        </span>
+        {crossFlight && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">跨組</span>}
+        <button type="button" className="ml-auto min-h-8 px-2 text-xs font-normal text-gray-400" onClick={() => onChange({ kind: 'none' })}>
+          不抓
+        </button>
       </div>
       <div className="flex gap-2">
         <Choice active={giver === null} onClick={() => setGiver(null)}>
@@ -311,7 +437,7 @@ function PairRow({
           {names[y]} 讓
         </Choice>
       </div>
-      {g.kind !== 'even' && (
+      {(g.kind === 'full' || g.kind === 'split') && (
         <div className="mt-2 space-y-2">
           <div className="flex gap-2">
             <Choice active={g.kind === 'full'} onClick={() => setMode('full')}>

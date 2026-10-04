@@ -1,7 +1,11 @@
 // 計分引擎共用型別。這個資料夾內的程式都是純函式，不相依 React / Prisma。
 
-export const SEATS = ['A', 'B', 'C', 'D'] as const;
+// 第 1 組固定用 A~D、第 2 組固定用 E~H：某一組加人或減人，另一組的座位代號不會變
+export const SEATS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'] as const;
 export type Seat = (typeof SEATS)[number];
+
+/** 每組最多人數（一張成績卡） */
+export const FLIGHT_SIZE = 4;
 
 /** 兩位球員的配對鍵，一律依座位排序，例如 "AB"、"CD" */
 export type PairKey = `${Seat}${Seat}`;
@@ -18,6 +22,7 @@ export interface CourseData {
 
 /** 一組配對的讓桿關係 */
 export type Grant =
+  | { kind: 'none' } // 不抓：這一對不比輸贏
   | { kind: 'even' }
   | { kind: 'full'; giver: Seat; receiver: Seat; n: number }
   | { kind: 'split'; giver: Seat; receiver: Seat; front: number; back: number };

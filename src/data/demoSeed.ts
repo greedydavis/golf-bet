@@ -23,7 +23,7 @@ export async function seedDemoData(ctx: {
   const rpc = <T,>(fn: string, args?: Record<string, unknown>) => ctx.rpcAs<T>(owner, fn, args);
 
   const ids: number[] = [];
-  for (const name of ['阿明', '大華', '小陳', '老王']) ids.push((await rpc<{ id: number }>('create_player', { p_name: name })).id);
+  for (const name of ['阿明', '大華', '小陳', '老王', '小李', '阿國', '志明', '建宏']) ids.push((await rpc<{ id: number }>('create_player', { p_name: name })).id);
   const courseId = await rpc<number>('save_course', { p_id: null, p_name: '示範球場', p_pars: PARS, p_hcp_index: HCP });
   const text = 'AB平打\nAB讓C前3後3\nAB讓D18\nC讓D2';
   await rpc('save_preset', { p_name: '週六四人組', p_text: text });
@@ -33,7 +33,7 @@ export async function seedDemoData(ctx: {
   const bet = defaultBetConfig();
   bet.games.match.options.tie = 'carry';
   const roundId = await rpc<number>('create_round', {
-    p_data: { date: '2026-09-20', playerIds: ids, courseId, courseName: '示範球場', handicapText: text, matrix, bet },
+    p_data: { date: '2026-09-20', playerIds: ids.slice(0, 4), courseId, courseName: '示範球場', handicapText: text, matrix, bet },
   });
   const scores = {
     A: card({ 1: 1, 5: -1, 12: 1 }),

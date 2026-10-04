@@ -1,17 +1,26 @@
 // 所有 RPC 的型別化包裝。結算由前端計分引擎計算，資料庫檢查（每位球員都有、加總為 0、成績完整）後寫入。
 
 import { defaultBetConfig, validateBetConfig } from '@/engine/games/registry';
+import { flightOf } from '@/engine/pairs';
 import { settleRound, type SettleResult } from '@/engine/settle';
 import type { HandicapMatrix, Scores, Seat } from '@/engine/types';
 import type { Backend } from './backend';
 import type { CourseRow, Me, Member, PlayerRow, Preset, Role, RoundDetail, RoundListItem, RoundSetupInput } from './types';
 
-type RawRound = Omit<RoundDetail, 'bet' | 'matrix'> & { bet: unknown; matrix: unknown };
+type RawRound = Omit<RoundDetail, 'bet' | 'matrix' | 'scorecardImages'> & {
+  bet: unknown;
+  matrix: unknown;
+  scorecardImage?: string | null;
+  scorecardImages?: (string | null)[];
+};
 
 function normalizeRound(r: RawRound): RoundDetail {
   const bet = validateBetConfig(r.bet);
   return {
     ...r,
+    // 資料庫尚未升級到分組版本時，補上組別與照片欄位
+    players: r.players.map((p) => ({ ...p, flight: p.flight ?? flightOf(p.seat) })),
+    scorecardImages: r.scorecardImages ?? [r.scorecardImage ?? null, null],
     bet: bet.ok ? bet.value : defaultBetConfig(),
     matrix: (r.matrix && typeof r.matrix === 'object' ? r.matrix : {}) as HandicapMatrix,
   };
@@ -86,17 +95,19 @@ export function api(b: Backend) {
       return self.resettle(id);
     },
 
-    /** 上傳成績卡照片（失敗不影響辨識，只回報錯誤） */
-    async attachScorecard(id: number, file: Blob) {
-      const path = `${id}/${Date.now()}.jpg`;
+    /** 上傳某一組的成績卡照片（失敗不影響辨識，只回報錯誤） */
+    async attachScorecard(id: number, file: Blob, flight = 1) {
+      const path = `${id}/f${flight}-${Date.now()}.jpg`;
       await b.uploadImage(path, file);
-      const old = await b.rpc<string | null>('set_round_image', { p_id: id, p_path: path });
+      const old = await b.rpc<string | null>('set_round_image', { p_id: id, p_path: path, p_flight: flight });
       if (old) await b.removeImage(old).catch(() => {});
     },
 
     async deleteRound(id: number) {
-      const image = await b.rpc<string | null>('delete_round', { p_id: id });
-      if (image) await b.removeImage(image).catch(() => {});
+      const images = await b.rpc<string[] | string | null>('delete_round', { p_id: id });
+      for (const path of Array.isArray(images) ? images : images ? [images] : []) {
+        await b.removeImage(path).catch(() => {});
+      }
     },
   };
   return self;

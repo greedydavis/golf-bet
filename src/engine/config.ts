@@ -5,7 +5,9 @@ import type { Segment } from './types';
 
 export const APP_CONFIG = {
   minPlayers: 2,
-  maxPlayers: 4,
+  /** 最多 2 組、每組 4 人 */
+  maxPlayers: 8,
+  maxFlights: 2,
   currency: '元',
   /** 每點金額預設值 */
   defaultPointValue: 100,

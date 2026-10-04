@@ -29,7 +29,7 @@ const HOLES_OF: Record<Segment, readonly number[] | undefined> = { front: FRONT,
 /** 回傳此注中 seat 可扣的桿數；null 代表這組讓桿方式不適用此注 */
 export function strokeDeduction(grant: Grant, seat: Seat, segment: Segment): number | null {
   const g = normalizeGrant(grant);
-  if (g.kind === 'even') return 0;
+  if (g.kind === 'even' || g.kind === 'none') return 0;
   if (g.kind === 'full') {
     if (segment !== 'total') return null;
     return g.receiver === seat ? g.n : 0;

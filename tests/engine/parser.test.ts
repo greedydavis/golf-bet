@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { completeMatrix, formatMatrix, normalizeForSeats, parseHandicap } from '@/engine/handicap/parser';
+import { completeMatrix, formatMatrix, isActive, normalizeForSeats, parseHandicap } from '@/engine/handicap/parser';
+import { flightOf, seatAt, seatsForGroups } from '@/engine/pairs';
+import type { Seat } from '@/engine/types';
 import { SEATS3, SEATS4 } from './fixtures';
 
 describe('讓桿語法解析', () => {
@@ -167,5 +169,59 @@ describe('normalizeForSeats', () => {
 
   it('文字有錯誤時原樣回傳', () => {
     expect(normalizeForSeats('A讓B2.5', SEATS3)).toBe('A讓B2.5');
+  });
+});
+
+describe('不抓（指定抓球對象）', () => {
+  const SEATS6: Seat[] = ['A', 'B', 'C', 'E', 'F', 'G']; // 第 1 組 3 人、第 2 組 3 人
+
+  it('AE不抓：這一對不比輸贏', () => {
+    const r = parseHandicap('AE不抓', SEATS6);
+    expect(r.ok).toBe(true);
+    expect(r.matrix.AE).toEqual({ kind: 'none' });
+  });
+
+  it('多人不抓：ABE不抓 = 三人兩兩不抓', () => {
+    expect(Object.keys(parseHandicap('ABE不抓', SEATS6).matrix).sort()).toEqual(['AB', 'AE', 'BE']);
+  });
+
+  it('不抓與平打 / 讓桿衝突', () => {
+    expect(parseHandicap('AE不抓\nAE平打', SEATS6).conflicted).toEqual(['AE']);
+    expect(parseHandicap('AE不抓\nA讓E3', SEATS6).conflicted).toEqual(['AE']);
+  });
+
+  it('跨組讓桿：A讓EF5、座位 D 不在這場', () => {
+    const r = parseHandicap('A讓EF5', SEATS6);
+    expect(r.matrix.AE).toEqual({ kind: 'full', giver: 'A', receiver: 'E', n: 5 });
+    expect(parseHandicap('A讓D5', SEATS6).ok).toBe(false);
+  });
+
+  it('formatMatrix 寫出不抓，可再解析回來', () => {
+    const r = parseHandicap('AB平打\nAE不抓\nB讓E3', SEATS6);
+    const text = formatMatrix(r.matrix, SEATS6);
+    expect(text).toContain('AE不抓');
+    expect(parseHandicap(text, SEATS6).matrix).toEqual(r.matrix);
+  });
+
+  it('normalizeForSeats：兩組球局沒寫到的配對補成不抓', () => {
+    const text = normalizeForSeats('AB平打\nA讓E3', ['A', 'B', 'E'], { kind: 'none' });
+    expect(text).toBe('AB平打\nA讓E3\nBE不抓');
+  });
+
+  it('isActive', () => {
+    expect(isActive({ kind: 'none' })).toBe(false);
+    expect(isActive({ kind: 'even' })).toBe(true);
+    expect(isActive(undefined)).toBe(true); // 沒寫到 = 平打
+  });
+});
+
+describe('座位與組別', () => {
+  it('第 1 組 A~D、第 2 組 E~H，人數不滿時代號不位移', () => {
+    expect(seatsForGroups([3, 2])).toEqual(['A', 'B', 'C', 'E', 'F']);
+    expect(seatsForGroups([4, 4])).toEqual(['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']);
+    expect(seatAt(2, 0)).toBe('E');
+    expect(flightOf('D')).toBe(1);
+    expect(flightOf('E')).toBe(2);
+    expect(() => seatAt(1, 4)).toThrow();
   });
 });

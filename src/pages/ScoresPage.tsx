@@ -30,7 +30,7 @@ export function ScoresPage() {
         key={r.id}
         roundId={r.id}
         courseName={r.courseName}
-        players={r.players.map((p) => ({ seat: p.seat, name: p.name, scores: p.scores }))}
+        players={r.players.map((p) => ({ seat: p.seat, flight: p.flight, name: p.name, scores: p.scores }))}
         course={r.course}
       />
     </div>
