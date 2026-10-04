@@ -14,6 +14,7 @@
 ## 規則
 
 - **新增或修改 RPC 的 migration，結尾一定要重跑 `20260923000003_grants.sql` 的權限區塊**，否則新函式會開放給 `anon`。
+- `public.ping()` 是唯一開放給 `anon` 的函式（保活排程 `.github/workflows/keepalive.yml` 用）。重跑權限區塊後要再 `grant execute on function public.ping() to anon`，其他函式不可開放給 `anon`。
 - 新增資料表：放在 `app` schema、啟用 RLS、只透過 RPC 存取，並在 `db-tests/` 補權限測試。
 - `src/engine/` 不能 import React 或 Supabase；修改時一定要同時修改測試。計算相關的 bug 先補會失敗的測試再修。
 - Anthropic API key 只能放在 Supabase Edge Function secret 與本機 `.env`；不能出現在前端、repo 或 `VITE_` 開頭的變數。

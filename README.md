@@ -71,7 +71,9 @@ Publishable key 本來就是公開給前端用的，資料安全由資料庫權�
 
 ## 備份與注意事項
 
-- Supabase 免費專案連續 7 天沒有使用會被暫停，進後台按 Restore 就能恢復。
+- Supabase 免費專案連續 7 天沒有使用會被暫停，進後台按 Restore 就能恢復（資料不會不見）。
+- 為了避免被暫停，GitHub Actions「Supabase 保活」每 3 天呼叫一次資料庫的 `ping()`。失敗時 GitHub 會寄信通知。
+- repo 連續 60 天沒有任何 commit 時，GitHub 會停用排程（會先寄信），到 Actions 頁面按 Enable 即可恢復。
 - 免費方案沒有可下載的自動備份。
 
 ## 結構

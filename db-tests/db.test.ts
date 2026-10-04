@@ -40,6 +40,14 @@ describe('帳號與權限', () => {
     await expect(t.rpc(null, 'list_players')).rejects.toThrow(/permission denied|沒有權限/);
   });
 
+  it('ping 是唯一開放給未登入的函式，其他函式仍然被擋', async () => {
+    expect(await t.rpc(null, 'ping')).toBeTruthy();
+    expect(await t.rpc(pending, 'ping')).toBeTruthy();
+    for (const fn of ['me', 'list_players', 'list_rounds', 'list_courses', 'list_presets', 'is_member']) {
+      await expect(t.rpc(null, fn)).rejects.toThrow(/permission denied/);
+    }
+  });
+
   it('前端角色不能直接讀寫資料表', async () => {
     await expect(
       t.db.transaction(async (tx) => {
