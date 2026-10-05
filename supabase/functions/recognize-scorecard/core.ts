@@ -3,9 +3,19 @@
 
 export const MODEL = 'claude-sonnet-5';
 
+export type MediaType = 'image/jpeg' | 'image/png' | 'image/webp';
+
+export interface ScorecardImage {
+  base64: string;
+  mediaType: MediaType;
+}
+
+/** 一次最多幾張圖（計分 App 常把前九、後九分成兩張） */
+export const MAX_IMAGES = 4;
+
 export interface RecognizeInput {
-  imageBase64: string;
-  mediaType: 'image/jpeg' | 'image/png' | 'image/webp';
+  /** 同一張成績卡的一張或多張圖片 */
+  images: ScorecardImage[];
   playerNames: string[];
   needCourse: boolean;
 }
@@ -29,12 +39,14 @@ export class RecognizeError extends Error {
 const SYSTEM = `你是高爾夫成績卡的讀取助手。使用者會給你一張手寫或印刷的成績卡照片，請把資料轉成 JSON。
 
 規則：
+- 圖片可能有一張或多張。多張時是「同一張成績卡」的不同部分（例如計分 App 把前九、後九分成兩張），請合併成一份結果，同一位球員只列一次。
+- 圖片可能只有前九（第 1~9 洞）或只有後九（第 10~18 洞）。沒有出現在圖片裡的洞一律給 null，不要補數字，也不要把後九的桿數放到前九的位置。
 - players：依成績卡上由上到下的順序列出每一位球員（通常 2~4 位），只列實際有填桿數的球員列。
-- strokes：每位球員第 1 洞到第 18 洞的「實際桿數」，共 18 個數字，依洞號排列。
+- strokes：每位球員第 1 洞到第 18 洞的「實際桿數」，一定要剛好 18 個元素，第 N 個元素就是第 N 洞；沒有資料的洞填 null。
   - 不要把 OUT / IN / TOT / 前九 / 後九 / 總計 等小計欄當成洞。
   - 有些成績卡記的是「與 Par 的差」（例如 0、+1、-1、○、△），請換算成實際桿數；無法確定時給 null。
   - 看不清楚、空白、被塗改到無法判斷的格子一律給 null，不要猜。
-- pars / hcpIndex：只有使用者要求時才讀，否則給 null。差點洞序通常標示為 HDCP、H.C.P.、Handicap 或「差點」。
+- pars / hcpIndex：只有使用者要求時才讀，否則給 null。差點洞序通常標示為 HDCP、H.C.P.、Handicap 或「差點」。同樣一定要 18 個元素，圖片裡沒有的洞填 null。
 - 若卡上有小計，可以拿來核對；對不上時在 notes 說明是哪位、哪幾洞可能有誤。
 - notes 用繁體中文。`;
 
@@ -77,17 +89,24 @@ export interface MessagesClient {
 }
 
 export function validateInput(body: unknown): RecognizeInput {
-  const b = body as Partial<RecognizeInput> | null;
-  if (!b || typeof b.imageBase64 !== 'string' || b.imageBase64.length === 0) throw new RecognizeError('沒有收到圖片', 400);
-  if (b.imageBase64.length > 7_000_000) throw new RecognizeError('圖片太大，請重新拍照', 400);
-  if (!['image/jpeg', 'image/png', 'image/webp'].includes(b.mediaType as string)) {
-    throw new RecognizeError('只支援 JPG / PNG / WebP 圖片', 400);
-  }
+  const b = body as (Partial<RecognizeInput> & { imageBase64?: unknown; mediaType?: unknown }) | null;
+  // 舊版前端只傳單張（imageBase64 + mediaType）
+  const raw: unknown[] = Array.isArray(b?.images) ? b.images : b?.imageBase64 ? [{ base64: b.imageBase64, mediaType: b.mediaType }] : [];
+  if (raw.length === 0) throw new RecognizeError('沒有收到圖片', 400);
+  if (raw.length > MAX_IMAGES) throw new RecognizeError(`一次最多上傳 ${MAX_IMAGES} 張圖片`, 400);
+  const images = raw.map((x) => {
+    const img = x as Partial<ScorecardImage> | null;
+    if (!img || typeof img.base64 !== 'string' || img.base64.length === 0) throw new RecognizeError('沒有收到圖片', 400);
+    if (img.base64.length > 7_000_000) throw new RecognizeError('圖片太大，請重新拍照', 400);
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(img.mediaType as string)) {
+      throw new RecognizeError('只支援 JPG / PNG / WebP 圖片', 400);
+    }
+    return { base64: img.base64, mediaType: img.mediaType as MediaType };
+  });
   return {
-    imageBase64: b.imageBase64,
-    mediaType: b.mediaType as RecognizeInput['mediaType'],
-    playerNames: Array.isArray(b.playerNames) ? b.playerNames.map(String).slice(0, 4) : [],
-    needCourse: b.needCourse === true,
+    images,
+    playerNames: Array.isArray(b?.playerNames) ? b?.playerNames.map(String).slice(0, 4) : [],
+    needCourse: b?.needCourse === true,
   };
 }
 
@@ -122,6 +141,7 @@ export function postprocess(raw: unknown): RecognizeResult {
 
 export async function recognizeScorecard(client: MessagesClient, input: RecognizeInput): Promise<RecognizeResult> {
   const instruction = [
+    input.images.length > 1 ? `這 ${input.images.length} 張圖片是同一張成績卡的不同部分，請合併成一份結果。` : '',
     input.playerNames.length
       ? `這場有 ${input.playerNames.length} 位球員，名字可能是：${input.playerNames.join('、')}（成績卡上可能寫綽號、縮寫或空白）。`
       : '',
@@ -138,7 +158,7 @@ export async function recognizeScorecard(client: MessagesClient, input: Recogniz
       {
         role: 'user',
         content: [
-          { type: 'image', source: { type: 'base64', media_type: input.mediaType, data: input.imageBase64 } },
+          ...input.images.map((img) => ({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.base64 } })),
           { type: 'text', text: instruction },
         ],
       },

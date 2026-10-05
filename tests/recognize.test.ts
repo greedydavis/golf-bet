@@ -7,7 +7,7 @@ import {
   type MessagesClient,
 } from '../supabase/functions/recognize-scorecard/core';
 
-const input = { imageBase64: 'AAAA', mediaType: 'image/jpeg' as const, playerNames: ['阿明'], needCourse: true };
+const input = { images: [{ base64: 'AAAA', mediaType: 'image/jpeg' as const }], playerNames: ['阿明'], needCourse: true };
 
 function fakeClient(response: { stop_reason: string; text?: string }, capture?: (p: Record<string, unknown>) => void): MessagesClient {
   return {
@@ -23,8 +23,11 @@ function fakeClient(response: { stop_reason: string; text?: string }, capture?: 
 describe('成績卡辨識核心', () => {
   it('輸入檢查', () => {
     expect(() => validateInput({})).toThrow('沒有收到圖片');
-    expect(() => validateInput({ imageBase64: 'x', mediaType: 'image/gif' })).toThrow('JPG');
+    expect(() => validateInput({ images: [{ base64: 'x', mediaType: 'image/gif' }] })).toThrow('JPG');
+    expect(() => validateInput({ images: new Array(5).fill(input.images[0]) })).toThrow('最多');
     expect(validateInput({ ...input, needCourse: 'yes' }).needCourse).toBe(false);
+    // 舊版前端的單張格式仍然接受
+    expect(validateInput({ imageBase64: 'AAAA', mediaType: 'image/png' }).images).toEqual([{ base64: 'AAAA', mediaType: 'image/png' }]);
   });
 
   it('補齊 18 格、剔除不合理數字', () => {
@@ -67,5 +70,27 @@ describe('成績卡辨識核心', () => {
     expect(describeApiError({ status: 401 }).message).toContain('API_KEY');
     expect(describeApiError({ status: 429 }).status).toBe(503);
     expect(describeApiError(new Error('network')).message).toContain('無法連線');
+  });
+
+  it('兩張圖片（前九 + 後九）一起送出，並告知是同一張成績卡', async () => {
+    let params: Record<string, unknown> = {};
+    const text = JSON.stringify({ players: [{ nameOnCard: 'A', strokes: new Array(18).fill(4) }], pars: null, hcpIndex: null, notes: '' });
+    const two = { ...input, images: [input.images[0], { base64: 'BBBB', mediaType: 'image/png' as const }] };
+    await recognizeScorecard(fakeClient({ stop_reason: 'end_turn', text }, (p) => (params = p)), two);
+    const content = (params.messages as { content: { type: string; text?: string }[] }[])[0].content;
+    expect(content.filter((c) => c.type === 'image')).toHaveLength(2);
+    expect(content.at(-1)!.text).toContain('2 張圖片是同一張成績卡');
+  });
+
+  it('只有前九的成績：後九維持 null，不會被補上數字', () => {
+    const r = postprocess({
+      players: [{ nameOnCard: 'A', strokes: [4, 5, 3, 6, 4, 3, 5, 5, 4, ...new Array(9).fill(null)] }],
+      pars: null,
+      hcpIndex: null,
+      notes: '',
+    });
+    expect(r.players[0].strokes.slice(0, 9)).toEqual([4, 5, 3, 6, 4, 3, 5, 5, 4]);
+    expect(r.players[0].strokes.slice(9)).toEqual(new Array(9).fill(null));
+    expect(r.notes).toBe('');
   });
 });

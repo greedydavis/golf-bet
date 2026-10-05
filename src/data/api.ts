@@ -2,10 +2,11 @@
 
 import { defaultBetConfig, validateBetConfig } from '@/engine/games/registry';
 import { flightOf } from '@/engine/pairs';
-import { settleRound, type SettleResult } from '@/engine/settle';
+import { frontNineReport, type FrontResult } from '@/engine/interim';
+import { settleRound, type RoundInput, type SettleResult } from '@/engine/settle';
 import type { HandicapMatrix, Scores, Seat } from '@/engine/types';
 import type { Backend } from './backend';
-import type { CourseRow, Me, Member, PlayerRow, Preset, Role, RoundDetail, RoundListItem, RoundSetupInput } from './types';
+import type { CourseRow, CourseSnapshot, Me, Member, PlayerRow, Preset, Role, RoundDetail, RoundListItem, RoundSetupInput } from './types';
 
 type RawRound = Omit<RoundDetail, 'bet' | 'matrix' | 'scorecardImages'> & {
   bet: unknown;
@@ -26,16 +27,26 @@ function normalizeRound(r: RawRound): RoundDetail {
   };
 }
 
-/** 以球局目前的資料計算結算結果 */
-export function settleDetail(r: RoundDetail): SettleResult {
-  if (!r.course) return { ok: false, errors: ['尚未設定球場 Par 與差點洞序'] };
-  return settleRound({
+function roundInput(r: RoundDetail & { course: CourseSnapshot }): RoundInput {
+  return {
     seats: r.players.map((p) => p.seat),
     course: { name: r.courseName, ...r.course },
     scores: Object.fromEntries(r.players.map((p) => [p.seat, p.scores])),
     matrix: r.matrix,
     bet: r.bet,
-  });
+  };
+}
+
+/** 以球局目前的資料計算結算結果 */
+export function settleDetail(r: RoundDetail): SettleResult {
+  if (!r.course) return { ok: false, errors: ['尚未設定球場 Par 與差點洞序'] };
+  return settleRound(roundInput({ ...r, course: r.course }));
+}
+
+/** 前九戰況：前九填完、整場還沒打完時的暫時輸贏 */
+export function frontDetail(r: RoundDetail): FrontResult {
+  if (!r.course) return { ok: false, errors: ['尚未設定球場 Par 與差點洞序'] };
+  return frontNineReport(roundInput({ ...r, course: r.course }));
 }
 
 export function api(b: Backend) {

@@ -23,6 +23,8 @@ export interface MatchDetail {
   holesWon: [number, number];
   /** 打完 18 洞仍未分出勝負而作廢的累積注數 */
   voidedStake: number;
+  /** 只算到一半（例如前九）時，還沒分出勝負、要帶到下一洞的累積注數 */
+  pendingStake: number;
 }
 
 export const matchPlay: PairwiseGame<MatchOptions, MatchDetail> = {
@@ -42,7 +44,8 @@ export const matchPlay: PairwiseGame<MatchOptions, MatchDetail> = {
     const holesWon: [number, number] = [0, 0];
     let carried = 0;
 
-    for (let i = 0; i < HOLES; i++) {
+    const upTo = Math.min(ctx.upTo ?? HOLES, HOLES);
+    for (let i = 0; i < upTo; i++) {
       const gross: [number, number] = [ctx.gross[a][i], ctx.gross[b][i]];
       const received: [number, number] = [ctx.received[a][i], ctx.received[b][i]];
       const net: [number, number] = [gross[0] - received[0], gross[1] - received[1]];
@@ -68,7 +71,13 @@ export const matchPlay: PairwiseGame<MatchOptions, MatchDetail> = {
 
     return {
       points: subtotal.total,
-      detail: { holes, subtotal, holesWon, voidedStake: carried },
+      detail: {
+        holes,
+        subtotal,
+        holesWon,
+        voidedStake: upTo === HOLES ? carried : 0,
+        pendingStake: upTo === HOLES ? 0 : carried,
+      },
     };
   },
 };

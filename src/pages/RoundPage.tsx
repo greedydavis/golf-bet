@@ -2,7 +2,8 @@ import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { useApi, useBackend } from '@/app/auth';
-import { settleDetail } from '@/data/api';
+import { frontDetail, settleDetail } from '@/data/api';
+import type { FrontReport } from '@/engine/interim';
 import { ErrorBox, fmtDate, fmtNum, Loading, PageTitle, Section, Signed } from '@/components/ui';
 import { APP_CONFIG, STROKE_MODE_LABEL, TIE_RULE_LABEL } from '@/engine/config';
 import { describeGrant } from '@/engine/handicap/parser';
@@ -45,6 +46,16 @@ export function RoundPage() {
   );
 
   if (!res.ok) {
+    // 前九填完、整場還沒打完：先顯示前九戰況，方便調整後九讓桿
+    const front = frontDetail(round);
+    if (front.ok) {
+      return (
+        <div>
+          {header}
+          <FrontNineView roundId={round.id} report={front.report} seats={seats} names={names} pars={round.course!.pars} />
+        </div>
+      );
+    }
     return (
       <div>
         {header}
@@ -194,35 +205,140 @@ function PairCard({ p, names, pars }: { p: PairSettlement; names: Record<Seat, s
         )}
       </div>
 
-      {md && (
-        <details className="border-t border-gray-100">
-          <summary className="px-3 py-2 text-sm text-brand-700">逐洞明細</summary>
-          <table className="w-full text-center text-sm tabular-nums">
-            <thead className="text-xs text-gray-500">
-              <tr>
-                <th className="py-1">洞</th>
-                <th>Par</th>
-                <th>{names[p.a]}</th>
-                <th>{names[p.b]}</th>
-                <th>結果</th>
-              </tr>
-            </thead>
-            <tbody>
-              {md.holes.map((h) => (
-                <tr key={h.hole} className={`${h.hole === 10 ? 'border-t-2 border-gray-200' : ''} ${h.winner ? '' : 'text-gray-500'}`}>
-                  <td className="py-1 text-gray-500">{h.hole}</td>
-                  <td className="text-gray-400">{pars[h.hole - 1]}</td>
-                  <NetCell gross={h.gross[0]} received={h.received[0]} win={h.winner === 'a'} />
-                  <NetCell gross={h.gross[1]} received={h.received[1]} win={h.winner === 'b'} />
-                  <td>{h.winner ? <Signed value={h.points} /> : h.stake > 1 ? `平（累積 ${h.stake}）` : '平'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <p className="px-3 pb-2 text-xs text-gray-400">● = 該洞被讓桿數，括號內為淨桿；點數以 {names[p.a]} 的角度表示</p>
-        </details>
-      )}
+      {md && <HoleDetails md={md} nameA={names[p.a]} nameB={names[p.b]} pars={pars} />}
     </div>
+  );
+}
+
+function HoleDetails({ md, nameA, nameB, pars }: { md: MatchDetail; nameA: string; nameB: string; pars: number[] }) {
+  return (
+    <details className="border-t border-gray-100">
+      <summary className="px-3 py-2 text-sm text-brand-700">逐洞明細</summary>
+      <table className="w-full text-center text-sm tabular-nums">
+        <thead className="text-xs text-gray-500">
+          <tr>
+            <th className="py-1">洞</th>
+            <th>Par</th>
+            <th>{nameA}</th>
+            <th>{nameB}</th>
+            <th>結果</th>
+          </tr>
+        </thead>
+        <tbody>
+          {md.holes.map((h) => (
+            <tr key={h.hole} className={`${h.hole === 10 ? 'border-t-2 border-gray-200' : ''} ${h.winner ? '' : 'text-gray-500'}`}>
+              <td className="py-1 text-gray-500">{h.hole}</td>
+              <td className="text-gray-400">{pars[h.hole - 1]}</td>
+              <NetCell gross={h.gross[0]} received={h.received[0]} win={h.winner === 'a'} />
+              <NetCell gross={h.gross[1]} received={h.received[1]} win={h.winner === 'b'} />
+              <td>{h.winner ? <Signed value={h.points} /> : h.stake > 1 ? `平（累積 ${h.stake}）` : '平'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="px-3 pb-2 text-xs text-gray-400">● = 該洞被讓桿數，括號內為淨桿；點數以 {nameA} 的角度表示</p>
+    </details>
+  );
+}
+
+/** 前九戰況：只算前九已經確定的輸贏，不寫入資料庫 */
+function FrontNineView({
+  roundId,
+  report,
+  seats,
+  names,
+  pars,
+}: {
+  roundId: number;
+  report: FrontReport;
+  seats: Seat[];
+  names: Record<Seat, string>;
+  pars: number[];
+}) {
+  const cur = APP_CONFIG.currency;
+  const ranking = [...seats].sort((a, b) => report.points[b] - report.points[a]);
+  return (
+    <>
+      <Section
+        title="前九戰況"
+        extra={<span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700">暫計・還沒結算</span>}
+      >
+        <ul className="divide-y divide-gray-100">
+          {ranking.map((seat) => (
+            <li key={seat} className="flex items-center justify-between py-2.5">
+              <span className="text-lg font-semibold">
+                <span className="mr-2 text-sm text-brand-700">{seat}</span>
+                {names[seat]}
+              </span>
+              <span className="text-right">
+                <Signed value={report.money[seat]} suffix={` ${cur}`} className="block text-xl font-bold" />
+                <Signed value={report.points[seat]} suffix=" 點" className="text-xs" />
+              </span>
+            </li>
+          ))}
+        </ul>
+        <p className="mt-2 text-xs text-gray-500">
+          只算前九已經分出勝負的部分。後九、全場總桿，以及還在累積的平手洞都還沒算進來。
+        </p>
+        <div className="mt-4 flex gap-2">
+          <Link to={`/rounds/${roundId}/edit`} className="btn-primary flex-1 text-sm">
+            調整後九讓桿
+          </Link>
+          <Link to={`/rounds/${roundId}/scores`} className="btn-secondary flex-1 text-sm">
+            輸入後九成績
+          </Link>
+        </div>
+        <p className="mt-2 text-xs text-gray-400">
+          調整方式：到第 2 步找到那一對，選「前九 / 後九分開」，只改後九的桿數，前九的輸贏不會變。
+        </p>
+      </Section>
+
+      <Section title="各組前九明細">
+        <div className="space-y-3">
+          {report.pairs.map((p) => {
+            const md = p.match?.detail;
+            const rec = p.stroke.received[0] || p.stroke.received[1];
+            return (
+              <div key={p.pair} className="rounded-xl ring-1 ring-gray-200">
+                <div className="flex items-center justify-between px-3 pt-3">
+                  <span className="font-bold">
+                    {names[p.a]} <span className="text-gray-400">vs</span> {names[p.b]}
+                  </span>
+                  <Signed value={p.points} suffix=" 點" className="font-bold" />
+                </div>
+                <div className="px-3 text-xs text-gray-500">{describeGrant(p.pair, p.grant, names)}</div>
+                <div className="space-y-1 px-3 py-2 text-sm">
+                  {p.match && md && (
+                    <div>
+                      <div className="flex justify-between">
+                        <span>
+                          比洞前九（{md.holesWon[0]} 勝 {md.holesWon[1]} 敗）
+                        </span>
+                        <Signed value={p.match.points} />
+                      </div>
+                      {md.pendingStake > 0 && (
+                        <div className="text-xs text-amber-600">最後 {md.pendingStake} 洞平手，累積帶到第 10 洞</div>
+                      )}
+                    </div>
+                  )}
+                  <div className="flex justify-between">
+                    <span>
+                      前九總桿
+                      <span className="ml-1 text-xs text-gray-500">
+                        {p.stroke.gross[0]} : {p.stroke.gross[1]}
+                        {rec > 0 && `，淨 ${p.stroke.net[0]} : ${p.stroke.net[1]}（前九讓 ${rec}）`}
+                      </span>
+                    </span>
+                    {p.stroke.betPoints === null ? <span className="text-xs text-gray-400">沒下這注</span> : <Signed value={p.stroke.betPoints} />}
+                  </div>
+                </div>
+                {md && <HoleDetails md={md} nameA={names[p.a]} nameB={names[p.b]} pars={pars} />}
+              </div>
+            );
+          })}
+        </div>
+      </Section>
+    </>
   );
 }
 

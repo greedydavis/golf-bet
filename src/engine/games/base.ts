@@ -10,6 +10,8 @@ export interface PairContext {
   /** 每洞被讓的桿數（讓方全為 0） */
   received: Record<Seat, number[]>;
   course: CourseData;
+  /** 只計算前幾洞（前九戰況用）；省略 = 18 洞 */
+  upTo?: number;
 }
 
 export interface PairGameResult<D = unknown> {

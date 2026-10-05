@@ -32,6 +32,7 @@ export function ScoresPage() {
         courseName={r.courseName}
         players={r.players.map((p) => ({ seat: p.seat, flight: p.flight, name: p.name, scores: p.scores }))}
         course={r.course}
+        images={r.scorecardImages}
       />
     </div>
   );
