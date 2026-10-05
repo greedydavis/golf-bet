@@ -21,7 +21,8 @@ export interface RecognizeInput {
 }
 
 export interface RecognizeResult {
-  players: { nameOnCard: string; strokes: (number | null)[] }[];
+  /** match：這一列對應到 playerNames 的第幾位（0 起算）；對不上名字時為 null */
+  players: { nameOnCard: string; strokes: (number | null)[]; match: number | null }[];
   pars: (number | null)[] | null;
   hcpIndex: (number | null)[] | null;
   notes: string;
@@ -39,7 +40,9 @@ export class RecognizeError extends Error {
 const SYSTEM = `你是高爾夫成績卡的讀取助手。使用者會給你一張手寫或印刷的成績卡照片，請把資料轉成 JSON。
 
 規則：
-- 圖片可能有一張或多張。多張時是「同一張成績卡」的不同部分（例如計分 App 把前九、後九分成兩張），請合併成一份結果，同一位球員只列一次。
+- 圖片可能有一張或多張。多張時可能是同一張成績卡的不同部分（例如計分 App 把前九、後九分成兩張），也可能是不同球員各自的成績畫面。請合併成一份結果：同一位球員只列一次，不同球員各列一筆。
+- 有些 App 畫面一次只顯示一位球員的成績（畫面上會列出同組名單，但只勾選其中一位）。這時只列出有顯示桿數的那一位，名字用被勾選的那個。
+- matchIndex：使用者會提供這一組的球員名單（有編號）。如果成績卡上的名字和名單裡某一位是同一個人，填那一位的編號。字完全相同、同音字、異體字（例如「啟」與「啓」）、少一兩個字的簡稱都算同一個人。只有名字本身看得出關聯才填；名字完全不像（例如卡上是英文名或綽號，名單是中文本名）、或無法確定時給 null，不要用排列順序去猜。同一個編號不能給兩位球員。
 - 圖片可能只有前九（第 1~9 洞）或只有後九（第 10~18 洞）。沒有出現在圖片裡的洞一律給 null，不要補數字，也不要把後九的桿數放到前九的位置。
 - players：依成績卡上由上到下的順序列出每一位球員（通常 2~4 位），只列實際有填桿數的球員列。
 - strokes：每位球員第 1 洞到第 18 洞的「實際桿數」，一定要剛好 18 個元素，第 N 個元素就是第 N 洞；沒有資料的洞填 null。
@@ -65,9 +68,13 @@ export const SCORECARD_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['nameOnCard', 'strokes'],
+        required: ['nameOnCard', 'matchIndex', 'strokes'],
         properties: {
           nameOnCard: { type: 'string', description: '該列的球員名字，看不出來就給空字串' },
+          matchIndex: {
+            anyOf: [{ type: 'integer' }, { type: 'null' }],
+            description: '對應到使用者提供的球員名單的編號（從 1 開始）；名字對不上或無法確定時給 null',
+          },
           strokes: holes('第 1~18 洞的桿數，共 18 個；看不清楚或空白的格子給 null'),
         },
       },
@@ -119,8 +126,13 @@ function fit18(arr: unknown): (number | null)[] {
 const validStroke = (v: number | null) => (v !== null && v >= 1 && v <= 20 ? v : null);
 
 /** 整理模型輸出：補齊 18 格、剔除不合理的數字 */
-export function postprocess(raw: unknown): RecognizeResult {
-  const r = raw as Partial<{ players: { nameOnCard?: unknown; strokes?: unknown }[]; pars: unknown; hcpIndex: unknown; notes: unknown }>;
+export function postprocess(raw: unknown, nameCount = 0): RecognizeResult {
+  const r = raw as Partial<{
+    players: { nameOnCard?: unknown; matchIndex?: unknown; strokes?: unknown }[];
+    pars: unknown;
+    hcpIndex: unknown;
+    notes: unknown;
+  }>;
   if (!r || !Array.isArray(r.players)) throw new RecognizeError('辨識結果格式不正確，請重試或改用手動輸入');
   if (r.players.length === 0) throw new RecognizeError('成績卡上找不到球員桿數，請確認照片是否清楚');
 
@@ -128,8 +140,18 @@ export function postprocess(raw: unknown): RecognizeResult {
   if (r.players.some((p) => !Array.isArray(p.strokes) || p.strokes.length !== 18)) {
     notes.push('部分球員讀到的洞數不是 18 洞，請特別核對。');
   }
+  // 名字對應：編號要在名單範圍內，而且不能有兩列指到同一位（有的話兩列都不採用）
+  const rows = r.players.slice(0, 6);
+  const picked = rows.map((p) =>
+    typeof p.matchIndex === 'number' && Number.isInteger(p.matchIndex) && p.matchIndex >= 1 && p.matchIndex <= nameCount
+      ? p.matchIndex - 1
+      : null,
+  );
+  const match = picked.map((m) => (m !== null && picked.filter((x) => x === m).length === 1 ? m : null));
+
   return {
-    players: r.players.slice(0, 6).map((p) => ({
+    players: rows.map((p, i) => ({
+      match: match[i],
       nameOnCard: typeof p.nameOnCard === 'string' ? p.nameOnCard.trim() : '',
       strokes: fit18(p.strokes).map(validStroke),
     })),
@@ -143,7 +165,7 @@ export async function recognizeScorecard(client: MessagesClient, input: Recogniz
   const instruction = [
     input.images.length > 1 ? `這 ${input.images.length} 張圖片是同一張成績卡的不同部分，請合併成一份結果。` : '',
     input.playerNames.length
-      ? `這場有 ${input.playerNames.length} 位球員，名字可能是：${input.playerNames.join('、')}（成績卡上可能寫綽號、縮寫或空白）。`
+      ? `這一組的球員名單（編號．名字）：${input.playerNames.map((n, i) => `${i + 1}．${n}`).join('、')}。成績卡上可能寫綽號、縮寫、同音字或空白；圖片裡不一定每一位都有成績。`
       : '',
     input.needCourse ? '這個球場尚未建檔，請一併讀取每洞的 Par 與差點洞序。' : 'pars 與 hcpIndex 請給 null。',
   ]
@@ -176,7 +198,7 @@ export async function recognizeScorecard(client: MessagesClient, input: Recogniz
   } catch {
     throw new RecognizeError('辨識結果格式不正確，請重試或改用手動輸入');
   }
-  return postprocess(parsed);
+  return postprocess(parsed, input.playerNames.length);
 }
 
 /** 把 Anthropic SDK 的錯誤轉成給使用者看的訊息（用 status 判斷，Node / Deno 通用） */

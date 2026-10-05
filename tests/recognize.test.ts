@@ -38,6 +38,7 @@ describe('成績卡辨識核心', () => {
       notes: '',
     });
     expect(r.players[0].nameOnCard).toBe('阿明');
+    expect(r.players[0].match).toBeNull();
     expect(r.players[0].strokes).toHaveLength(18);
     expect(r.players[0].strokes.slice(0, 6)).toEqual([4, 5, null, null, null, null]);
     expect(r.pars).toHaveLength(18);
@@ -92,5 +93,25 @@ describe('成績卡辨識核心', () => {
     expect(r.players[0].strokes.slice(0, 9)).toEqual([4, 5, 3, 6, 4, 3, 5, 5, 4]);
     expect(r.players[0].strokes.slice(9)).toEqual(new Array(9).fill(null));
     expect(r.notes).toBe('');
+  });
+
+  it('名字對應：編號轉成 0 起算，超出範圍或重複的不採用', () => {
+    const row = (matchIndex: unknown) => ({ nameOnCard: 'x', matchIndex, strokes: new Array(18).fill(4) });
+    const r = postprocess({ players: [row(2), row(1), row(9), row(null), row('3')], pars: null, hcpIndex: null, notes: '' }, 4);
+    expect(r.players.map((p) => p.match)).toEqual([1, 0, null, null, null]);
+    // 兩列都說自己是第 2 位 → 兩列都不採用，交給使用者決定
+    const dup = postprocess({ players: [row(2), row(2), row(3)], pars: null, hcpIndex: null, notes: '' }, 4);
+    expect(dup.players.map((p) => p.match)).toEqual([null, null, 2]);
+  });
+
+  it('把有編號的球員名單交給模型', async () => {
+    let params: Record<string, unknown> = {};
+    const text = JSON.stringify({ players: [{ nameOnCard: '王曉明', matchIndex: 2, strokes: new Array(18).fill(4) }], pars: null, hcpIndex: null, notes: '' });
+    const r = await recognizeScorecard(fakeClient({ stop_reason: 'end_turn', text }, (p) => (params = p)), {
+      ...input,
+      playerNames: ['張大同', '王小明', '李志強'],
+    });
+    expect(JSON.stringify(params.messages)).toContain('1．張大同、2．王小明、3．李志強');
+    expect(r.players[0].match).toBe(1);
   });
 });

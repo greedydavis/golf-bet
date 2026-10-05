@@ -5,3 +5,12 @@ dist
 supabase/setup-all.sql
 supabase/.temp
 *.tsbuildinfo
+
+# 測試用的成績卡圖片（含真實姓名與成績，repo 是公開的，不能進版本控制）
+/IMG_*
+/*.png
+/*.PNG
+/*.jpg
+/*.JPG
+/*.jpeg
+/*.JPEG

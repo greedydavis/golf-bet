@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router';
 import { useApi, useBackend } from '@/app/auth';
 import { courseProblems, toNum, type Holes } from '@/components/HoleTable';
 import type { RecognizeResult as RecognizeResponse } from '@/data/backend';
+import { defaultMapping } from '@/data/recognitionMapping';
 import { isValidStroke } from '@/engine/course';
 import type { Seat } from '@/engine/types';
 
@@ -93,6 +94,8 @@ export function ScoreEditor({ roundId, courseName, players, course, images }: Pr
   const [recognizing, setRecognizing] = useState(false);
   const [recognized, setRecognized] = useState<RecognizeResponse | null>(null);
   const [mapping, setMapping] = useState<Record<Seat, number>>({} as Record<Seat, number>);
+  /** 哪些座位是靠名字對應到的（顯示提示用） */
+  const [matchedByName, setMatchedByName] = useState<Partial<Record<Seat, boolean>>>({});
   /** 帶入辨識結果時，已經填好的格子要不要保留（分兩次上傳前九、後九時才不會蓋掉改過的成績） */
   const [keepExisting, setKeepExisting] = useState(true);
   const [message, setMessage] = useState<{ tone: 'error' | 'info'; text: string[] } | null>(null);
@@ -150,8 +153,10 @@ export function ScoreEditor({ roundId, courseName, players, course, images }: Pr
       setRecognized(r);
       // 已經有成績時預設只補空格
       setKeepExisting(true);
-      // 預設依成績卡順序對應 A、B、C、D
-      setMapping(Object.fromEntries(seats.map((s, i) => [s, i < r.players.length ? i : -1])) as Record<Seat, number>);
+      // 預設對應：先看名字（同音字、異體字由模型比對），對不上的再照成績卡順序
+      const { rowOfSeat, byName } = defaultMapping(seats.length, r.players);
+      setMapping(Object.fromEntries(seats.map((s, i) => [s, rowOfSeat[i]])) as Record<Seat, number>);
+      setMatchedByName(Object.fromEntries(seats.map((s, i) => [s, byName[i]])));
     } catch (e) {
       setMessage({ tone: 'error', text: [e instanceof Error ? e.message : '辨識失敗'] });
     } finally {
@@ -295,7 +300,10 @@ export function ScoreEditor({ roundId, courseName, players, course, images }: Pr
                 <select
                   className="field"
                   value={mapping[s] ?? -1}
-                  onChange={(e) => setMapping({ ...mapping, [s]: Number(e.target.value) })}
+                  onChange={(e) => {
+                    setMapping({ ...mapping, [s]: Number(e.target.value) });
+                    setMatchedByName({ ...matchedByName, [s]: false });
+                  }}
                 >
                   <option value={-1}>（不套用）</option>
                   {recognized.players.map((p, i) => (
@@ -307,6 +315,16 @@ export function ScoreEditor({ roundId, courseName, players, course, images }: Pr
               </li>
             ))}
           </ul>
+          <p className="mt-2 text-xs text-gray-500">
+            {seats.some((s) => matchedByName[s])
+              ? '已依成績卡上的名字自動對應；名字對不上的才照順序排。請確認每個人對到的是自己的成績。'
+              : '成績卡上的名字和名單對不上，先照成績卡由上到下的順序對應。請確認每個人對到的是自己的成績。'}
+          </p>
+          {recognized.players.length < seats.length && (
+            <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-700">
+              這次只讀到 {recognized.players.length} 位球員的成績（這一組有 {seats.length} 位）。沒對到的人會維持原樣，可以再上傳其他人的圖片。
+            </p>
+          )}
           {seats.some((s) => scores[s].some((v) => v !== null)) && (
             <label className="mt-3 flex items-start gap-2 text-sm">
               <input
