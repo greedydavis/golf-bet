@@ -1,6 +1,6 @@
 // 球場 Par / 差點洞序 編輯表：前九、後九左右並排
 
-import { validateCourse } from '@/engine/course';
+import { isPerNineIndex, toEighteenIndex, validateCourse } from '@/engine/course';
 
 export type Holes = (number | null)[];
 
@@ -9,12 +9,23 @@ export function toNum(v: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/** 27 洞球場的寫法說明（前後九各自 1~9） */
+export const PER_NINE_NOTE =
+  '前九、後九的差點各自是 1~9（27 洞球場的寫法）。儲存時會自動換算成 18 洞：前九變單數（1、3、5…）、後九變雙數（2、4、6…），各九洞內的難易順序不變。前後九分開讓桿不受影響；全場讓桿會前九、後九輪流給。';
+
 export function courseProblems(pars: Holes, hcp: Holes) {
   const dupHcp = new Set(hcp.filter((h, i) => h !== null && hcp.indexOf(h) !== i));
+  // 前後九各自 1~9：填完時直接視為正確；還在填（目前的數字都在 1~9、各九洞內沒有重複）時不把跨九洞的重複標紅
+  const perNine = isPerNineIndex(hcp);
+  const dupWithin = (xs: Holes) => xs.some((h, i) => h !== null && xs.indexOf(h) !== i);
+  const maybePerNine =
+    perNine || (hcp.every((h) => h === null || (h >= 1 && h <= 9)) && !dupWithin(hcp.slice(0, 9)) && !dupWithin(hcp.slice(9)));
+  const errors = validateCourse(pars, perNine ? toEighteenIndex(hcp) : hcp);
   return {
+    perNine,
     badPar: (i: number) => pars[i] === null || pars[i]! < 3 || pars[i]! > 6,
-    badHcp: (i: number) => hcp[i] === null || hcp[i]! < 1 || hcp[i]! > 18 || dupHcp.has(hcp[i]!),
-    errors: validateCourse(pars, hcp),
+    badHcp: (i: number) => hcp[i] === null || hcp[i]! < 1 || hcp[i]! > 18 || (!maybePerNine && dupHcp.has(hcp[i]!)),
+    errors: maybePerNine ? errors.filter((e) => !e.includes('重複')) : errors,
   };
 }
 
@@ -84,6 +95,7 @@ export function HoleTable({
         {half(0)}
         {half(9)}
       </div>
+      {p.perNine && <p className="mt-2 rounded-lg bg-brand-50 px-3 py-2 text-xs text-brand-900">{PER_NINE_NOTE}</p>}
       {p.errors.length > 0 && (
         <ul className="mt-2 list-inside list-disc text-sm text-red-600">
           {p.errors.slice(0, 4).map((e) => (

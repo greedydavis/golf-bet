@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { useApi } from '@/app/auth';
 import { HoleTable, type Holes } from '@/components/HoleTable';
+import { toEighteenIndex } from '@/engine/course';
 import { Empty, ErrorBox, Loading, PageTitle } from '@/components/ui';
 
 export function CoursesPage() {
@@ -71,7 +72,7 @@ function CourseEditor({ id, initial }: { id?: number; initial: { name: string; p
     qc.invalidateQueries({ queryKey: ['course', id] });
     navigate('/courses');
   };
-  const save = useMutation({ mutationFn: () => api.saveCourse({ id, name, pars, hcpIndex: hcp }), onSuccess: done });
+  const save = useMutation({ mutationFn: () => api.saveCourse({ id, name, pars, hcpIndex: toEighteenIndex(hcp) }), onSuccess: done });
   const remove = useMutation({ mutationFn: () => api.deleteCourse(id!), onSuccess: done });
 
   return (

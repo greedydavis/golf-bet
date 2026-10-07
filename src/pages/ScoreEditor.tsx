@@ -2,10 +2,10 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Fragment, useRef, useState, useTransition } from 'react';
 import { useNavigate } from 'react-router';
 import { useApi, useBackend } from '@/app/auth';
-import { courseProblems, toNum, type Holes } from '@/components/HoleTable';
+import { courseProblems, PER_NINE_NOTE, toNum, type Holes } from '@/components/HoleTable';
 import type { RecognizeResult as RecognizeResponse } from '@/data/backend';
 import { defaultMapping } from '@/data/recognitionMapping';
-import { isValidStroke } from '@/engine/course';
+import { isValidStroke, toEighteenIndex } from '@/engine/course';
 import type { Seat } from '@/engine/types';
 
 interface Props {
@@ -203,7 +203,7 @@ export function ScoreEditor({ roundId, courseName, players, course, images }: Pr
       setShowMissing(true);
       let res;
       try {
-        res = await api.saveScores(roundId, scores, needCourse ? { pars, hcpIndex: hcp, saveAsCourse } : undefined);
+        res = await api.saveScores(roundId, scores, needCourse ? { pars, hcpIndex: toEighteenIndex(hcp), saveAsCourse } : undefined);
       } catch (e) {
         return setMessage({ tone: 'error', text: [(e as Error).message] });
       }
@@ -434,6 +434,7 @@ export function ScoreEditor({ roundId, courseName, players, course, images }: Pr
 
         {needCourse && (
           <div className="mt-3 px-2">
+            {cp.perNine && <p className="mb-2 rounded-lg bg-brand-50 px-3 py-2 text-xs text-brand-900">{PER_NINE_NOTE}</p>}
             {showMissing && cp.errors.length > 0 && <p className="mb-2 text-sm text-red-600">球場資料：{cp.errors.slice(0, 3).join('、')}</p>}
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" className="h-5 w-5 accent-brand-600" checked={saveAsCourse} onChange={(e) => setSaveAsCourse(e.target.checked)} />
