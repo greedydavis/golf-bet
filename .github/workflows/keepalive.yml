@@ -1,12 +1,12 @@
 name: Supabase 保活
 
-# Supabase 免費專案連續 7 天沒有使用會被暫停。每 3 天呼叫一次資料庫的 ping()（只回傳時間，不讀寫資料）。
+# Supabase 免費專案活動不足會被暫停，官方建議每天有幾次資料庫請求。每天呼叫 3 次 ping()（讀一次資料表，只回傳時間，不改資料）。
 # 失敗時 GitHub 會寄信通知：多半是專案已被暫停，要到 Supabase 後台按 Restore。
 # 注意：repo 連續 60 天沒有任何 commit 時，GitHub 會自動停用排程（會先寄信），到 Actions 頁面按 Enable 即可恢復。
 
 on:
   schedule:
-    - cron: '17 1 */3 * *' # 每月 1、4、7…日 UTC 01:17（台灣 09:17）
+    - cron: '17 1,9,17 * * *' # 每天 UTC 01:17、09:17、17:17（台灣 09:17、17:17、01:17）
   workflow_dispatch:
 
 permissions: {}

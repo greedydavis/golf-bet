@@ -43,6 +43,8 @@ describe('帳號與權限', () => {
   it('ping 是唯一開放給未登入的函式，其他函式仍然被擋', async () => {
     expect(await t.rpc(null, 'ping')).toBeTruthy();
     expect(await t.rpc(pending, 'ping')).toBeTruthy();
+    // 只回傳時間，不回傳資料內容
+    expect(Number.isNaN(Date.parse(String(await t.rpc(null, 'ping'))))).toBe(false);
     for (const fn of ['me', 'list_players', 'list_rounds', 'list_courses', 'list_presets', 'is_member']) {
       await expect(t.rpc(null, fn)).rejects.toThrow(/permission denied/);
     }
